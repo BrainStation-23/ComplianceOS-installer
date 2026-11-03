@@ -80,6 +80,26 @@ check "persistent network failure gives up after 3" "failed/3" "$(build)"
 BUILD_OUTPUTS=("$BUILD_ERR")
 check "real build error is not retried"            "failed/1" "$(build)"
 
+# --- Container environment ------------------------------------------------------
+# What `docker run` is given; the keys are stubs, nothing here reads .env.
+RUN_ARGS="${T}/run-args"
+docker() { [[ "$1" == "run" ]] && printf '%s\n' "$@" >"$RUN_ARGS"; [[ "$1" != "network" ]]; }
+run_logged() { shift; "$@"; }
+supabase_network_name() { printf 'supabase_default'; }
+frontend_bind_address() { printf '127.0.0.1'; }
+supabase_publishable_key() { printf 'pub'; }
+supabase_service_role_key() { printf 'svc'; }
+frontend_mdm_proxy_secret() { printf 'mdm-secret'; }
+AUTH_CAPTCHA_ENABLED="false"; TURNSTILE_SITE_KEY=""
+SUPABASE_PUBLIC_URL="https://supabase.example.com"; SITE_URL="https://app.example.com"
+frontend_run_container sentinel-ops-frontend sentinel-ops:abc1234 3000 >/dev/null 2>&1
+check "SITE_URL reaches the container (sentinel-ops#633)" "1" "$(grep -cx -- 'SITE_URL=https://app.example.com' "$RUN_ARGS")"
+check "SUPABASE_PUBLIC_URL still does"                     "1" "$(grep -cx -- 'SUPABASE_PUBLIC_URL=https://supabase.example.com' "$RUN_ARGS")"
+check "the service-role key is still passed by name only"  "0" "$(grep -c -- 'svc' "$RUN_ARGS")"
+SITE_URL="https://new.example.com"
+frontend_run_container sentinel-ops-frontend sentinel-ops:abc1234 3000 >/dev/null 2>&1
+check "a new SITE_URL (domain set) is what the next start gets" "1" "$(grep -cx -- 'SITE_URL=https://new.example.com' "$RUN_ARGS")"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 rm -rf "$T"
 [[ $fail -eq 0 ]]
