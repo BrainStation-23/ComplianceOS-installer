@@ -387,7 +387,7 @@ sign-in page need no certificate, so only what needs one moves.
 2. Start the proxy with that certificate:
 
    ```bash
-   sudo sentinel-ops mdm-proxy enable --port 8443      --cert <zoraxy>/conf/certs/mdm.example.com.pem      --key  <zoraxy>/conf/certs/mdm.example.com.key
+   sudo sentinel-ops mdm-proxy enable --port 9443      --cert <zoraxy>/conf/certs/mdm.example.com.pem      --key  <zoraxy>/conf/certs/mdm.example.com.key
    ```
 
    It checks the certificate and key, copies them, opens the port in
@@ -396,7 +396,7 @@ sign-in page need no certificate, so only what needs one moves.
    Cloudflare, `--cloudflare --domain mdm.example.com` gets the proxy its own
    Let's Encrypt certificate through a DNS challenge instead and renews it,
    with nothing to copy: the way to go when Zoraxy runs on another machine.
-   See [WINDOWS-MDM.md](WINDOWS-MDM.md#certificate-for-port-8443).
+   See [WINDOWS-MDM.md](WINDOWS-MDM.md#certificate-for-port-9443).
 3. In the console, **Settings → MDM → MDM port**: the same port, **before PCs
    enroll** (a PC keeps the address it enrolled with).
 4. Open the port wherever else traffic is filtered (a cloud security group).
