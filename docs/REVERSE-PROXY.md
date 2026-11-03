@@ -137,9 +137,10 @@ rule (**Edit Custom Header**): direction *to upstream*, name
 another proxy or a CDN, `$remote_ip` is that hop's address, not the user's -
 set the header at the outermost proxy instead.
 
-For **Windows MDM**, Zoraxy can't request a PC's client certificate: keep it
-as it is and run `sentinel-ops mdm-proxy enable`, which serves MDM on a port of
-its own. See [Zoraxy can't serve the MDM hostname](#zoraxy-cant-serve-the-mdm-hostname).
+For **Windows MDM**, keep Zoraxy as it is (it never asks for client
+certificates, which is what enrollment needs) and run `sentinel-ops mdm-proxy
+enable` for the check-ins' own port. See
+[Windows MDM hostname](#windows-mdm-hostname-client-certificates).
 
 ### nginx
 
@@ -286,40 +287,79 @@ least one 6 MiB upload chunk - or leave buffering off that router entirely.
 ## Windows MDM hostname (client certificates)
 
 Only needed if you enroll Windows PCs in the console's MDM (**Settings → MDM**;
-the application's `docs/windows-mdm.md` covers the rest). After enrollment, a
-PC authenticates every check-in to `/ManagementServer/MDM.svc` with its device
-certificate **at the TLS layer**. TLS ends at your proxy, so on the MDM
-hostname the proxy must:
+the application's `docs/windows-mdm.md` covers the rest, and
+[WINDOWS-MDM.md](WINDOWS-MDM.md) has the step-by-step with a message for IT).
 
-1. **Request** a client certificate, but neither require nor verify one:
-   enrollment requests have none, and the application checks the certificate
-   against its own Windows device CA.
+An enrolled PC authenticates every check-in to `/ManagementServer/MDM.svc`
+with its device certificate **at the TLS layer**, so whatever ends TLS for
+check-ins must ask for it. But a PC that isn't enrolled yet has no
+certificate, and Windows fails enrollment wherever it's asked for one
+(`0x80192F0C`, sentinel-ops#638). TLS is set up before the request path is
+known, so one listener can't ask on `MDM.svc` and not on the rest. Hence:
+
+| Traffic | Port | Client certificate |
+|---|---|---|
+| Discovery, sign-in page, certificate policy, enrollment, renewal, the console, the API | 443 (your proxy) | **never asked for** on the MDM hostname |
+| Check-ins (`/ManagementServer/MDM.svc`) | the MDM port | requested, forwarded |
+
+Renewal stays on 443: Windows signs a renewal request with the PC's current
+certificate, and the application checks that signature.
+
+- **443:** point the MDM hostname at the **frontend** (`127.0.0.1:41820`) like
+  any other hostname, with a publicly trusted certificate. Zoraxy never asks
+  for client certificates; on nginx leave `ssl_verify_client` off, on Caddy
+  leave out `client_auth`.
+- **The MDM port:** `sentinel-ops mdm-proxy enable` runs a Caddy container that
+  requests the PC's certificate, forwards it with the proxy secret, and
+  answers `MDM.svc` only (404 for everything else). It works next to any proxy
+  on 443, on the same server or behind a port forward from another machine.
+  Set **Settings → MDM → MDM port** in the console to the same port, **before
+  PCs enroll** (a PC keeps the check-in address it enrolled with).
+
+```bash
+sudo sentinel-ops mdm-proxy enable --port 9443 --cloudflare --domain mdm.example.com
+# or with your proxy's certificate files:
+sudo sentinel-ops mdm-proxy enable --port 9443 --cert <fullchain.pem> --key <privkey.pem>
+sudo sentinel-ops mdm-proxy status
+```
+
+`status` should show that the proxy requests client certificates and that
+`/ManagementServer/MDM.svc` answers 401 without one: the request reached the
+app with the secret. A 503 means the app has no secret yet
+(`sentinel-ops update app`). Open the port wherever else traffic is filtered
+(a cloud security group). A network that only lets 80 and 443 out (some guest
+or hotel Wi-Fi) blocks check-ins until the PC is back on a normal network.
+`sentinel-ops mdm-proxy disable` removes it; clear the console's MDM port too.
+
+### Your own listener on the MDM port
+
+Instead of the installer's proxy, any server that can **request** (not
+require) a client certificate and forward it in a header works. It must:
+
+1. **Request** a client certificate, but neither require nor verify one: the
+   application checks it against its own Windows device CA.
 2. **Forward** it in `X-Client-Cert`, together with the **proxy secret** in
    `X-MDM-Proxy-Secret`. The application trusts the certificate header only
    when the secret comes with it.
 3. **Set** both headers itself, never pass through what a client sent.
+4. Answer `/ManagementServer/MDM.svc` only.
 
 The installer generates the secret on the first install or update that starts
-the frontend, keeps it in `supabase/.env`, and passes it to the container.
-Read it with:
+the frontend, keeps it in `supabase/.env`, and passes it to the container:
 
 ```bash
 sudo sentinel-ops credentials --show     # "Windows MDM (reverse proxy)"
 ```
 
-If your proxy has to use other header names, set `MDM_CLIENT_CERT_HEADER` and
-`MDM_PROXY_SECRET_HEADER` in `config/installer.env` and run
+If your listener has to use other header names, set `MDM_CLIENT_CERT_HEADER`
+and `MDM_PROXY_SECRET_HEADER` in `config/installer.env` and run
 `sentinel-ops update app`.
 
-The MDM hostname goes to the **frontend** upstream (`127.0.0.1:41820`). Until
-the proxy forwards the certificate, enrolled PCs can't check in: the console's
-**Settings → MDM** says so when PCs are enrolled but none has checked in.
-
-### nginx
+nginx:
 
 ```nginx
 server {
-    listen 443 ssl;
+    listen 9443 ssl;
     server_name mdm.example.com;
     ssl_certificate     /etc/letsencrypt/live/mdm.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/mdm.example.com/privkey.pem;
@@ -327,7 +367,7 @@ server {
     # ask for the PC's certificate, but don't verify it here
     ssl_verify_client optional_no_ca;
 
-    location / {
+    location = /ManagementServer/MDM.svc {
         proxy_pass http://127.0.0.1:41820;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -335,134 +375,37 @@ server {
         proxy_set_header X-Client-Cert $ssl_client_escaped_cert;
         proxy_set_header X-MDM-Proxy-Secret "<proxy secret>";
     }
+    location / { return 404; }
 }
 ```
 
-### Caddy
+Caddy:
 
 ```caddy
-mdm.example.com {
+mdm.example.com:9443 {
     tls {
         client_auth {
             mode request
         }
     }
-    reverse_proxy 127.0.0.1:41820 {
-        header_up X-Client-Cert {http.request.tls.client.certificate_der_base64}
-        header_up X-MDM-Proxy-Secret "<proxy secret>"
+    handle /ManagementServer/MDM.svc {
+        reverse_proxy 127.0.0.1:41820 {
+            header_up X-Client-Cert {http.request.tls.client.certificate_der_base64}
+            header_up X-MDM-Proxy-Secret "<proxy secret>"
+        }
+    }
+    handle {
+        respond 404
     }
 }
 ```
 
 The application accepts the certificate as a URL-encoded PEM (nginx), a PEM on
-one line, or base64 DER (Caddy). Another proxy works if it can **request** (not
-require) a client certificate on the MDM hostname and forward it in a header;
-none besides nginx and Caddy has been tried.
+one line, or base64 DER (Caddy).
 
-### Zoraxy can't serve the MDM hostname
-
-Zoraxy (checked against v3.3.5) never asks a client for a certificate: its TLS
-listener has no client-certificate setting, and no rule or header can forward
-one. Its stream proxy forwards by port, not by hostname, so it can't pass the
-MDM hostname's TLS through to something that can either. With Zoraxy on port
-443 for every hostname:
-
-- enrollment works (discovery, the certificate policy and enrollment don't need
-  a client certificate);
-- **check-ins don't**: `/ManagementServer/MDM.svc` answers 401 to every PC,
-  and the console's **Settings → MDM** says that PCs are enrolled but none has
-  checked in;
-- certificate renewal fails too, since it also authenticates with the PC's
-  certificate.
-
-**The supported setup: an MDM port** (step by step, with a message for IT:
-[WINDOWS-MDM.md](WINDOWS-MDM.md)). Keep Zoraxy exactly as it is and give
-MDM a port of its own, served by the installer's MDM proxy: a Caddy container
-that requests the PC's certificate and forwards it, with the proxy secret, to
-the frontend. Windows always looks for discovery on 443, and discovery and the
-sign-in page need no certificate, so only what needs one moves.
-
-1. Keep Zoraxy's rule for the MDM hostname, pointing at the frontend
-   (`127.0.0.1:41820`), with its ACME certificate.
-2. Start the proxy with that certificate:
-
-   ```bash
-   sudo sentinel-ops mdm-proxy enable --port 9443      --cert <zoraxy>/conf/certs/mdm.example.com.pem      --key  <zoraxy>/conf/certs/mdm.example.com.key
-   ```
-
-   It checks the certificate and key, copies them, opens the port in
-   ufw/firewalld, and installs a daily timer that copies them again when
-   Zoraxy renews (`sentinel-ops mdm-proxy sync-cert`). With DNS on
-   Cloudflare, `--cloudflare --domain mdm.example.com` gets the proxy its own
-   Let's Encrypt certificate through a DNS challenge instead and renews it,
-   with nothing to copy: the way to go when Zoraxy runs on another machine.
-   See [WINDOWS-MDM.md](WINDOWS-MDM.md#certificate-for-port-9443).
-3. In the console, **Settings → MDM → MDM port**: the same port, **before PCs
-   enroll** (a PC keeps the address it enrolled with).
-4. Open the port wherever else traffic is filtered (a cloud security group).
-5. Check it:
-
-   ```bash
-   sudo sentinel-ops mdm-proxy status
-   ```
-
-   It should show that the proxy requests client certificates, and that
-   `/ManagementServer/MDM.svc` answers 401 without one: the request reached the
-   app with the secret. A 503 means the app has no secret yet
-   (`sentinel-ops update app`).
-
-| Traffic | Port | Served by |
-|---|---|---|
-| Discovery, the sign-in page, the console, the API | 443 | Zoraxy |
-| Certificate policy, enrollment, renewal, check-ins | the MDM port | the MDM proxy |
-
-The proxy answers only those MDM paths; everything else on its port is a 404.
-A network that only lets 80 and 443 out (some guest or hotel Wi-Fi) blocks
-check-ins until the PC is back on a normal network. `sentinel-ops mdm-proxy
-disable` removes it; clear the console's MDM port too.
-
-If you'd rather keep all MDM traffic on 443, these also work:
-
-**An SNI router in front of Zoraxy.** nginx's `stream` module reads the
-hostname a connection asks for without decrypting it, passes the MDM
-hostname's connections to an nginx server that requests the client certificate
-(the [nginx](#nginx-1) configuration above, listening on `127.0.0.1:8443`),
-and everything else to Zoraxy unchanged. Zoraxy moves off 443: set its
-**Incoming Port** (Global Settings) to e.g. `4443`. Turn on its **PROXY
-Protocol** setting (*Accept PROXY protocol v1/v2 headers on the TLS
-listener*) so it still sees users' addresses; that turns off HTTP/3, which
-can't pass through a TCP router anyway.
-
-```nginx
-# nginx.conf, top level (not inside http {})
-stream {
-    map $ssl_preread_server_name $sentinel_upstream {
-        mdm.example.com  127.0.0.1:8443;   # requests the PC's certificate
-        default          127.0.0.1:4443;   # Zoraxy, as before
-    }
-    server {
-        listen 443;
-        ssl_preread on;
-        proxy_pass $sentinel_upstream;
-        proxy_protocol on;   # both upstreams learn the user's address
-    }
-}
-```
-
-The MDM server block then accepts the PROXY protocol too: make its first line
-`listen 127.0.0.1:8443 ssl proxy_protocol;` instead of `listen 443 ssl;`.
-
-Port 80 stays with Zoraxy, so its ACME HTTP-01 renewals keep working. The MDM
-server block needs its own certificate for the MDM hostname; reuse the one
-Zoraxy issued (it keeps them under its `conf/certs` directory) or issue one
-with certbot's DNS challenge.
-
-**A second public IP.** Point the MDM hostname at its own address and run
-nginx or Caddy (above) on that address's port 443. Zoraxy keeps the other
-address and nothing about it changes.
-
-Either way, check it from a PC: **Settings → MDM** shows the last check-in
-once one gets through.
+Until the listener forwards the certificate, enrolled PCs can't check in: the
+console's **Settings → MDM** says so when PCs are enrolled but none has checked
+in.
 
 ## Things that will bite you
 

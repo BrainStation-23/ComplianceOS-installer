@@ -43,8 +43,10 @@ cert "${T}/b.key" "${T}/b.pem" other.example.com
 # --- the Caddyfile ---------------------------------------------------------------
 CF="$(mdm_proxy_caddyfile)"
 check "requests, doesn't require, a client certificate" "1" "$(grep -c 'mode request' <<<"$CF")"
-check "serves only the MDM paths" "1" \
-    "$(grep -c '@mdm path /EnrollmentServer/Policy.svc /EnrollmentServer/Enrollment.svc /ManagementServer/MDM.svc' <<<"$CF")"
+check "serves check-ins only" "1" "$(grep -cx $'\t@mdm path /ManagementServer/MDM.svc' <<<"$CF")"
+# sentinel-ops#638: a PC that isn't enrolled can't get through a port that
+# asks for a certificate, so enrollment stays on 443
+check "not the enrollment endpoints" "0" "$(grep -c 'EnrollmentServer' <<<"$CF")"
 check "answers 404 elsewhere" "1" "$(grep -c 'respond 404' <<<"$CF")"
 check "forwards to the frontend by name" "1" "$(grep -c 'reverse_proxy sentinel-ops-frontend:41820' <<<"$CF")"
 check "the certificate as base64 DER" "1" \
@@ -187,6 +189,15 @@ MDM_PROXY_CERT_SOURCE="files"
 : >"$ARGV"
 _mdm_proxy_sync_cert >/dev/null 2>&1
 check "with files, certbot isn't run" "0" "$(grep -c -- 'renew' "$ARGV")"
+
+# a self-update that changes the proxy's configuration applies at the next sync (#25)
+STARTED=0
+printf 'an older Caddyfile\n' >"${CONFIG_DIR}/mdm-proxy/Caddyfile"
+_mdm_proxy_sync_cert >/dev/null 2>&1
+check "an out-of-date Caddyfile restarts the proxy" "1" "$STARTED"
+mdm_proxy_caddyfile >"${CONFIG_DIR}/mdm-proxy/Caddyfile"; STARTED=0
+_mdm_proxy_sync_cert >/dev/null 2>&1
+check "a current one doesn't" "0" "$STARTED"
 
 rm -rf "$T"
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

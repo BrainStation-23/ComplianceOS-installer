@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# lib/commands/mdm_proxy.sh - sentinel-ops mdm-proxy (#18): a port of its own
-# for Windows MDM behind a front proxy that can't request client certificates
-# (Zoraxy). See lib/mdm_proxy.sh and docs/REVERSE-PROXY.md.
+# lib/commands/mdm_proxy.sh - sentinel-ops mdm-proxy (#18, #25): a port of its
+# own for Windows MDM check-ins, which need the PC's client certificate while
+# enrollment on 443 must not be asked for one. See lib/mdm_proxy.sh and
+# docs/REVERSE-PROXY.md.
 #
 #   sentinel-ops mdm-proxy status
 #   sentinel-ops mdm-proxy enable [--port N] [--cert FILE] [--key FILE]
@@ -63,9 +64,9 @@ _mdm_proxy_enable() {
     require_root
     installation_exists || die "No installation found at ${INSTALL_DIR}."
     section "Windows MDM proxy"
-    printf 'Windows PCs check in with a client certificate. When the proxy on 443\n'
-    printf "can't request one (Zoraxy), this proxy takes a port of its own for them;\n"
-    printf 'discovery stays on 443. Its certificate for the MDM hostname comes either\n'
+    printf 'Windows PCs check in with a client certificate, but enroll only where none\n'
+    printf 'is asked for, so check-ins get this port of their own; discovery, sign-in\n'
+    printf 'and enrollment stay on 443. Its certificate for the MDM hostname comes either\n'
     printf "from Let's Encrypt through a Cloudflare DNS challenge, issued and renewed\n"
     printf 'here (works wherever the front proxy runs), or from files your front proxy\n'
     printf 'issued (Zoraxy: <zoraxy>/conf/certs/<hostname>.pem and .key).\n\n'
@@ -154,8 +155,10 @@ _mdm_proxy_disable() {
 }
 
 # Refresh the served certificate from its source; restart only when it changed
-# (Caddy doesn't watch its certificate files). With Let's Encrypt, renew it
-# first; certbot does nothing until 30 days before expiry.
+# (Caddy doesn't watch its certificate files), or when the Caddyfile this
+# installer would write differs from the running one, so a self-update's new
+# proxy configuration (#25) applies at the next daily run. With Let's
+# Encrypt, renew first; certbot does nothing until 30 days before expiry.
 _mdm_proxy_sync_cert() {
     [[ "$MDM_PROXY_ENABLED" == "true" ]] || { log_info "The MDM proxy is off."; return 0; }
     local result renewed=0
@@ -167,6 +170,9 @@ _mdm_proxy_sync_cert() {
     if [[ "$result" == "changed" ]]; then
         mdm_proxy_start || return 1
         log_ok "MDM proxy certificate renewed"
+    elif [[ "$(mdm_proxy_caddyfile)" != "$(cat "$(mdm_proxy_dir)/Caddyfile" 2>/dev/null)" ]]; then
+        mdm_proxy_start || return 1
+        log_ok "MDM proxy configuration updated"
     else
         log_info "MDM proxy certificate unchanged"
     fi

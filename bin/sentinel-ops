@@ -123,8 +123,9 @@ Commands:
                           trailing slash on a URL); apply fixes and restart
   mdm-proxy [status|enable|disable|sync-cert] [--port N --cert FILE --key FILE]
   mdm-proxy enable --cloudflare [--port N --domain HOST --email ADDR]
-                          Windows MDM on a port of its own, for a front proxy
-                          that can't request client certificates (Zoraxy).
+                          Windows MDM check-ins on a port of their own (they
+                          need the PC's certificate; enrollment on 443 must
+                          not ask for one).
                           --cloudflare: Let's Encrypt through Cloudflare DNS,
                           issued and renewed here (token: CLOUDFLARE_API_TOKEN
                           or asked) - see docs/WINDOWS-MDM.md
