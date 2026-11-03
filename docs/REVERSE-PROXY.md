@@ -137,6 +137,9 @@ rule (**Edit Custom Header**): direction *to upstream*, name
 another proxy or a CDN, `$remote_ip` is that hop's address, not the user's -
 set the header at the outermost proxy instead.
 
+Zoraxy can't serve a **Windows MDM** hostname: it can't request a PC's client
+certificate. See [Zoraxy can't serve the MDM hostname](#zoraxy-cant-serve-the-mdm-hostname).
+
 ### nginx
 
 ```nginx
@@ -350,9 +353,70 @@ mdm.example.com {
 }
 ```
 
-Zoraxy and Traefik can do the same if they can request (not require) a client
-certificate and forward it in a header; the application accepts a URL-encoded
-PEM (nginx), a PEM on one line, or base64 DER (Caddy).
+The application accepts the certificate as a URL-encoded PEM (nginx), a PEM on
+one line, or base64 DER (Caddy). Another proxy works if it can **request** (not
+require) a client certificate on the MDM hostname and forward it in a header;
+none besides nginx and Caddy has been tried.
+
+### Zoraxy can't serve the MDM hostname
+
+Zoraxy (checked against v3.3.5) never asks a client for a certificate: its TLS
+listener has no client-certificate setting, and no rule or header can forward
+one. Its stream proxy forwards by port, not by hostname, so it can't pass the
+MDM hostname's TLS through to something that can either. With Zoraxy on port
+443 for every hostname:
+
+- enrollment works (discovery, the certificate policy and enrollment don't need
+  a client certificate);
+- **check-ins don't**: `/ManagementServer/MDM.svc` answers 401 to every PC,
+  and the console's **Settings → MDM** says that PCs are enrolled but none has
+  checked in;
+- certificate renewal fails too, since it also authenticates with the PC's
+  certificate.
+
+Until the application can take MDM traffic on a port of its own, these are
+the ways around it.
+
+**An SNI router in front of Zoraxy.** nginx's `stream` module reads the
+hostname a connection asks for without decrypting it, passes the MDM
+hostname's connections to an nginx server that requests the client certificate
+(the [nginx](#nginx-1) configuration above, listening on `127.0.0.1:8443`),
+and everything else to Zoraxy unchanged. Zoraxy moves off 443: set its
+**Incoming Port** (Global Settings) to e.g. `4443`. Turn on its **PROXY
+Protocol** setting (*Accept PROXY protocol v1/v2 headers on the TLS
+listener*) so it still sees users' addresses; that turns off HTTP/3, which
+can't pass through a TCP router anyway.
+
+```nginx
+# nginx.conf, top level (not inside http {})
+stream {
+    map $ssl_preread_server_name $sentinel_upstream {
+        mdm.example.com  127.0.0.1:8443;   # requests the PC's certificate
+        default          127.0.0.1:4443;   # Zoraxy, as before
+    }
+    server {
+        listen 443;
+        ssl_preread on;
+        proxy_pass $sentinel_upstream;
+        proxy_protocol on;   # both upstreams learn the user's address
+    }
+}
+```
+
+The MDM server block then accepts the PROXY protocol too: make its first line
+`listen 127.0.0.1:8443 ssl proxy_protocol;` instead of `listen 443 ssl;`.
+
+Port 80 stays with Zoraxy, so its ACME HTTP-01 renewals keep working. The MDM
+server block needs its own certificate for the MDM hostname; reuse the one
+Zoraxy issued (it keeps them under its `conf/certs` directory) or issue one
+with certbot's DNS challenge.
+
+**A second public IP.** Point the MDM hostname at its own address and run
+nginx or Caddy (above) on that address's port 443. Zoraxy keeps the other
+address and nothing about it changes.
+
+Either way, check it from a PC: **Settings → MDM** shows the last check-in
+once one gets through.
 
 ## Things that will bite you
 
