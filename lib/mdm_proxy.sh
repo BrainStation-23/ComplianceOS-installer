@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-# lib/mdm_proxy.sh - the Windows MDM proxy (#18, sentinel-ops#611).
+# lib/mdm_proxy.sh - the Windows MDM proxy (#18, #25, sentinel-ops#611, #638).
 #
-# After enrollment, a Windows PC authenticates every MDM check-in and
-# certificate renewal with its device certificate at the TLS layer, so
-# whatever terminates TLS for that traffic has to request the certificate and
-# forward it to the app. Zoraxy, and any front proxy that can't request
-# client certificates, keeps port 443 (discovery and the sign-in page need
-# none); this Caddy container takes a port of its own for the rest. The
-# console's Settings -> MDM -> MDM port must name the same port.
+# After enrollment, a Windows PC authenticates every MDM check-in with its
+# device certificate at the TLS layer, so whatever terminates TLS for
+# check-ins has to request the certificate and forward it to the app. A PC
+# that isn't enrolled has no certificate, and Windows fails enrollment
+# (0x80192F0C) wherever it's asked for one; TLS is set up before the path is
+# known, so check-ins need a port of their own. This Caddy container is that
+# port and answers MDM.svc only; discovery, sign-in, enrollment and renewal
+# (proved by its signed PKCS#7) stay on 443 behind the front proxy, which
+# must not ask for certificates. The console's Settings -> MDM -> MDM port
+# must name the same port.
 #
 # It reaches the frontend by container name on the Supabase network, and
 # forwards the certificate with the proxy secret lib/frontend.sh generates.
@@ -89,10 +92,9 @@ mdm_proxy_acme_renew() {
     mdm_proxy_certbot renew --non-interactive --cert-name "$MDM_PROXY_DOMAIN"
 }
 
-# The paths the app serves on the MDM port: the certificate policy,
-# enrollment (and its renewal) and check-ins. Discovery and the sign-in page
-# stay on 443.
-MDM_PROXY_PATHS="/EnrollmentServer/Policy.svc /EnrollmentServer/Enrollment.svc /ManagementServer/MDM.svc"
+# The paths the app serves on the MDM port: check-ins only. Everything else
+# is a 404 here (sentinel-ops#638: the enrollment endpoints moved to 443).
+MDM_PROXY_PATHS="/ManagementServer/MDM.svc"
 
 # The Caddyfile, printed. Pure: the secret stays in the container's
 # environment ({$MDM_PROXY_SECRET}), never in the file.

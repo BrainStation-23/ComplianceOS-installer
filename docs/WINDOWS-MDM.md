@@ -12,25 +12,27 @@ profiles) is in the application's `docs/windows-mdm.md`.
 
 ## In one paragraph
 
-An enrolled PC proves who it is with a **client certificate**. Whatever
-receives its connection has to ask for that certificate and pass it on.
-**Zoraxy can't**, so with Zoraxy in front of everything, PCs enroll but never
-check in. The fix: Zoraxy keeps port **443** for everything it does today, and
-a small proxy run by this installer listens on a second port, **9443**, for the
-MDM traffic that needs the certificate. PCs use the same hostname for both;
-only the port differs.
+An enrolled PC proves who it is at every check-in with a **client
+certificate**, so whatever receives check-ins has to ask for that certificate
+and pass it on. A PC that isn't enrolled yet has none, and Windows refuses to
+enroll wherever it's asked for one; TLS is set up before the request path is
+known, so one port can't do both. So: Zoraxy keeps port **443** for everything
+it does today, enrollment included, and never asks for certificates; a small
+proxy run by this installer listens on a second port, **9443**, for the
+check-ins. PCs use the same hostname for both; only the port differs.
 
 ```
                       ┌─ port 443  → Zoraxy (unchanged)       → Sentinel Ops
- Windows PC ──────────┤              discovery, sign-in page, the console
- mdm.example.com      │
+ Windows PC ──────────┤              discovery, sign-in, enrollment,
+ mdm.example.com      │              certificate renewal, the console
                       └─ port 9443 → MDM proxy (this installer) → Sentinel Ops
-                                     enrollment, check-ins, certificate renewal
+                                     check-ins (asks for the PC's certificate)
 ```
 
-If your proxy on 443 *can* request client certificates (nginx or Caddy set up
-as in [REVERSE-PROXY.md](REVERSE-PROXY.md#windows-mdm-hostname-client-certificates)),
-you don't need any of this: leave the console's MDM port empty.
+This holds whatever proxy you run on 443: even nginx or Caddy, which *can*
+request client certificates, must not on the MDM hostname, or PCs can't
+enroll (sentinel-ops#638). Check-ins always need a port of their own; see
+[REVERSE-PROXY.md](REVERSE-PROXY.md#windows-mdm-hostname-client-certificates).
 
 ## What has to be in place
 
@@ -205,15 +207,13 @@ in the console.
 
 ## Questions IT may ask
 
-- **Why not use port 443 for everything?** It would mean a proxy in front of
-  Zoraxy that splits traffic by hostname, or a second public address for the
-  MDM hostname. Both work, and both are described in
-  [REVERSE-PROXY.md](REVERSE-PROXY.md#zoraxy-cant-serve-the-mdm-hostname).
-  A second port changes nothing about the existing setup.
-- **Is 9443 exposed to everything?** Only three MDM paths answer on it; every
-  other request gets a 404. Enrolling needs a one-time token from the console
-  or the agent, and every check-in needs a certificate this server issued to
-  that PC, which the application checks.
+- **Why not use port 443 for everything?** Check-ins need the server to ask
+  for the PC's certificate, and enrolling needs it not to. TLS is set up before
+  the server knows which of the two a connection is for, so they need
+  different ports. A second port changes nothing about the existing setup.
+- **Is 9443 exposed to everything?** Only the check-in path answers on it;
+  every other request gets a 404, and every check-in needs a certificate this
+  server issued to that PC, which the application checks.
 - **Does anything decrypt traffic in between?** No. The MDM proxy is where TLS
   ends for port 9443, as Zoraxy is for 443.
 - **Can it be another port?** Yes: pass `--port`, and set the same port in the
