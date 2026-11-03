@@ -70,7 +70,7 @@ _nuke_inventory() {
     fi
 
     local running=0 name
-    for name in "$APP_CONTAINER_NAME" "${APP_CONTAINER_NAME}-staging"; do
+    for name in "$APP_CONTAINER_NAME" "${APP_CONTAINER_NAME}-staging" "$MDM_PROXY_CONTAINER"; do
         container_exists "$name" && running=$(( running + 1 ))
     done
     status_line "App containers" "" "${running} to remove"
@@ -138,7 +138,7 @@ _nuke_confirm() {
 
 _nuke_app_containers() {
     local name
-    for name in "$APP_CONTAINER_NAME" "${APP_CONTAINER_NAME}-staging"; do
+    for name in "$APP_CONTAINER_NAME" "${APP_CONTAINER_NAME}-staging" "$MDM_PROXY_CONTAINER"; do
         if container_exists "$name"; then
             docker rm -f "$name" >/dev/null 2>&1 && log_ok "Removed container ${name}" \
                 || log_warn "Could not remove container ${name}"
@@ -245,7 +245,7 @@ _nuke_filesystem() {
 _nuke_timers() {
     have_cmd systemctl || return 0
     local unit
-    for unit in "$SO_AUTOUPDATE_UNIT" "$SO_BACKUP_UNIT"; do
+    for unit in "$SO_AUTOUPDATE_UNIT" "$SO_BACKUP_UNIT" "$SO_MDM_CERT_UNIT"; do
         [[ -f "/etc/systemd/system/${unit}.timer" ]] || continue
         systemctl disable --now "${unit}.timer" >/dev/null 2>&1 || true
         systemctl stop "${unit}.service" >/dev/null 2>&1 || true

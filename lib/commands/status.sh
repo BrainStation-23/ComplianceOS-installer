@@ -216,6 +216,7 @@ cmd_status() {
     _status_azure
     _status_auth
     _status_app
+    [[ "$MDM_PROXY_ENABLED" == "true" ]] && _mdm_proxy_status
     _status_backups
     _status_urls
     _status_meta

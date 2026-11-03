@@ -64,6 +64,15 @@ AUTH_RATE_LIMIT_TOKEN=""
 # supabase/.env (lib/frontend.sh:frontend_mdm_proxy_secret).
 MDM_CLIENT_CERT_HEADER=""
 MDM_PROXY_SECRET_HEADER=""
+# The Windows MDM proxy (lib/mdm_proxy.sh, #18): Caddy on a port of its own for
+# what needs the PC's client certificate, when the front proxy can't request
+# one (Zoraxy). The console's Settings -> MDM -> MDM port must match the port.
+MDM_PROXY_ENABLED="false"
+MDM_PROXY_PORT="8443"
+MDM_PROXY_BIND="0.0.0.0"
+MDM_PROXY_CERT_FILE=""
+MDM_PROXY_KEY_FILE=""
+MDM_PROXY_IMAGE="caddy:2.11.7-alpine"
 # Supabase Storage's global upload limit in bytes (lib/storage.sh). Upstream
 # ships 50 MiB; the application's installer bucket allows 4 GiB.
 STORAGE_FILE_SIZE_LIMIT="4294967296"
@@ -142,6 +151,8 @@ config_load() {
                AUTH_HIBP_ENABLED AUTH_HIBP_FAIL_CLOSED AUTH_CAPTCHA_ENABLED \
                TURNSTILE_SITE_KEY AUTH_RATE_LIMIT_HEADER AUTH_RATE_LIMIT_TOKEN \
                MDM_CLIENT_CERT_HEADER MDM_PROXY_SECRET_HEADER \
+               MDM_PROXY_ENABLED MDM_PROXY_PORT MDM_PROXY_BIND \
+               MDM_PROXY_CERT_FILE MDM_PROXY_KEY_FILE MDM_PROXY_IMAGE \
                STORAGE_FILE_SIZE_LIMIT IMAGE_CLEANUP_ENABLED IMAGE_BUILD_CACHE_MAX_AGE \
                BACKUP_RETENTION_COUNT \
                BACKUP_SCHEDULE_ENABLED BACKUP_SCHEDULE_CALENDAR BACKUP_SCHEDULE_CHECK_DAY \
@@ -208,6 +219,13 @@ config_save() {
         printf '# uses the app defaults; the proxy secret lives only in supabase/.env.\n'
         printf 'MDM_CLIENT_CERT_HEADER=%s\n'    "$MDM_CLIENT_CERT_HEADER"
         printf 'MDM_PROXY_SECRET_HEADER=%s\n\n' "$MDM_PROXY_SECRET_HEADER"
+        printf '# Windows MDM proxy (sentinel-ops mdm-proxy) - see docs/REVERSE-PROXY.md\n'
+        printf 'MDM_PROXY_ENABLED=%s\n'   "$MDM_PROXY_ENABLED"
+        printf 'MDM_PROXY_PORT=%s\n'      "$MDM_PROXY_PORT"
+        printf 'MDM_PROXY_BIND=%s\n'      "$MDM_PROXY_BIND"
+        printf 'MDM_PROXY_CERT_FILE=%s\n' "$MDM_PROXY_CERT_FILE"
+        printf 'MDM_PROXY_KEY_FILE=%s\n'  "$MDM_PROXY_KEY_FILE"
+        printf 'MDM_PROXY_IMAGE=%s\n\n'  "$MDM_PROXY_IMAGE"
         printf '# Storage upload limit in bytes - see docs/REVERSE-PROXY.md\n'
         printf 'STORAGE_FILE_SIZE_LIMIT=%s\n\n' "$STORAGE_FILE_SIZE_LIMIT"
         printf '# Docker image cleanup after updates - see docs/OPERATIONS.md\n'
