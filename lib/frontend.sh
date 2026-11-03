@@ -295,6 +295,10 @@ frontend_run_container() {
         -e "SUPABASE_URL=${server_url}"
         # The browser gets this one, via the /runtime-config.js server route.
         -e "SUPABASE_PUBLIC_URL=${SUPABASE_PUBLIC_URL}"
+        # The console's own public origin. Auth redirects only to SITE_URL/**, so
+        # the Windows MDM sign-in builds its Azure AD callback on it
+        # (sentinel-ops#633); `domain set` re-creates the container with the new one.
+        -e "SITE_URL=${SITE_URL}"
         # Both keys are passed by name, not as NAME=value: run_logged writes the
         # argv it is given into the installer log, and the service-role key is a
         # full-access credential that must not be persisted there.
