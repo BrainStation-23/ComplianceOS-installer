@@ -110,6 +110,84 @@ check "the timer runs sync-cert" "1" \
     "$(mdm_proxy_unit_text service | grep -c 'ExecStart=/usr/local/bin/sentinel-ops --dir /opt/sentinel-ops mdm-proxy sync-cert')"
 check "daily" "1" "$(mdm_proxy_unit_text timer | grep -c 'OnCalendar=daily')"
 
+# --- Let's Encrypt through Cloudflare DNS -----------------------------------------
+source "${ROOT}/lib/commands/mdm_proxy.sh"
+MDM_PROXY_CERTBOT_IMAGE="certbot/dns-cloudflare:v5.8.0"
+MDM_PROXY_DOMAIN="mdm.example.com"; MDM_PROXY_ACME_EMAIL=""
+TOKEN="cf-token-$RANDOM$RANDOM"
+
+check "a hostname passes" "0" "$(mdm_proxy_valid_hostname mdm.sentinelops.example.xyz; echo $?)"
+check "a bare word fails" "1" "$(mdm_proxy_valid_hostname localhost; echo $?)"
+check "a URL fails" "1" "$(mdm_proxy_valid_hostname https://mdm.example.com; echo $?)"
+
+# certbot: records its argv, and on certonly/renew "issues" a.pem the way
+# certbot lays it out (live/ symlinks into archive/)
+CERTBOT_RC=0
+docker() {
+    [[ "$1" == "run" ]] || return 0
+    printf '%s\n' "$@" >"$ARGV"
+    (( CERTBOT_RC == 0 )) || return "$CERTBOT_RC"
+    local acme live arch
+    acme="$(mdm_proxy_acme_dir)"; live="${acme}/live/${MDM_PROXY_DOMAIN}"; arch="${acme}/archive/${MDM_PROXY_DOMAIN}"
+    mkdir -p "$live" "$arch"
+    cp "${T}/issued.pem" "${arch}/fullchain1.pem"; cp "${T}/issued.key" "${arch}/privkey1.pem"
+    ln -sf "../../archive/${MDM_PROXY_DOMAIN}/fullchain1.pem" "${live}/fullchain.pem"
+    ln -sf "../../archive/${MDM_PROXY_DOMAIN}/privkey1.pem" "${live}/privkey.pem"
+}
+cert "${T}/issued.key" "${T}/issued.pem" mdm.example.com
+
+rm -f "$(mdm_proxy_cloudflare_ini)"
+mdm_proxy_acme_issue >/dev/null 2>&1
+check "without a token certbot isn't run" "1" "$?"
+check "and no directory is mounted in the token's place" "1" "$([[ -d "$(mdm_proxy_cloudflare_ini)" ]]; echo $?)"
+
+mdm_proxy_cloudflare_save_token "$TOKEN"
+check "the token is stored" "$TOKEN" "$(mdm_proxy_cloudflare_token)"
+# Git Bash on Windows has no Unix modes to check
+[[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* ]] \
+    || check "readable by root only" "600" "$(stat -c %a "$(mdm_proxy_cloudflare_ini)")"
+
+mdm_proxy_acme_issue >/dev/null 2>&1
+check "issuing runs certbot" "0" "$?"
+check "the pinned certbot image" "1" "$(grep -cx -- 'certbot/dns-cloudflare:v5.8.0' "$ARGV")"
+check "certonly" "1" "$(grep -cx -- 'certonly' "$ARGV")"
+check "through the Cloudflare DNS plugin" "1" "$(grep -cx -- '--dns-cloudflare' "$ARGV")"
+check "for the MDM hostname, named after it" "2" "$(grep -cx -- 'mdm.example.com' "$ARGV")"
+check "keeps a certificate that isn't due" "1" "$(grep -cx -- '--keep-until-expiring' "$ARGV")"
+check "no email: registered without one" "1" "$(grep -cx -- '--register-unsafely-without-email' "$ARGV")"
+check "the token is mounted read-only" "1" "$(grep -cx -- "$(mdm_proxy_cloudflare_ini):/cloudflare.ini:ro" "$ARGV")"
+check "never on the command line" "0" "$(grep -c -- "$TOKEN" "$ARGV")"
+MDM_PROXY_ACME_EMAIL="it@example.com"
+mdm_proxy_acme_issue >/dev/null 2>&1
+check "with an email, registered with it" "1" "$(grep -cx -- 'it@example.com' "$ARGV")"
+MDM_PROXY_ACME_EMAIL=""
+
+MDM_PROXY_CERT_FILE="$(mdm_proxy_acme_cert_file "$MDM_PROXY_DOMAIN")"
+MDM_PROXY_KEY_FILE="$(mdm_proxy_acme_key_file "$MDM_PROXY_DOMAIN")"
+check "certbot's live files pass the pair check" "0" \
+    "$(mdm_proxy_check_pair "$MDM_PROXY_CERT_FILE" "$MDM_PROXY_KEY_FILE" >/dev/null; echo $?)"
+
+# sync-cert renews first, and serves what certbot renewed
+MDM_PROXY_ENABLED="true"; MDM_PROXY_CERT_SOURCE="cloudflare"
+STARTED=0
+mdm_proxy_start() { STARTED=$((STARTED+1)); }
+_mdm_proxy_sync_cert >/dev/null 2>&1
+check "sync-cert asks certbot to renew" "1" "$(grep -cx -- 'renew' "$ARGV")"
+check "the issued certificate is served" "$(file_sha256 "${T}/issued.pem")" "$(file_sha256 "${CONFIG_DIR}/mdm-proxy/tls/cert.pem")"
+check "and the proxy restarted for it" "1" "$STARTED"
+cert "${T}/issued.key" "${T}/issued.pem" mdm.example.com
+_mdm_proxy_sync_cert >/dev/null 2>&1
+check "a renewal is served" "$(file_sha256 "${T}/issued.pem")" "$(file_sha256 "${CONFIG_DIR}/mdm-proxy/tls/cert.pem")"
+CERTBOT_RC=1
+_mdm_proxy_sync_cert >/dev/null 2>&1
+check "a failed renewal fails the run" "1" "$?"
+check "but keeps serving the current certificate" "$(file_sha256 "${T}/issued.pem")" "$(file_sha256 "${CONFIG_DIR}/mdm-proxy/tls/cert.pem")"
+CERTBOT_RC=0
+MDM_PROXY_CERT_SOURCE="files"
+: >"$ARGV"
+_mdm_proxy_sync_cert >/dev/null 2>&1
+check "with files, certbot isn't run" "0" "$(grep -c -- 'renew' "$ARGV")"
+
 rm -rf "$T"
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

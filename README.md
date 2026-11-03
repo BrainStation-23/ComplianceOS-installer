@@ -153,7 +153,7 @@ switches over with a config change and a restart — no reinstall.
 | `sentinel-ops domain [status\|set <hostname>]` | Point the stack at a real domain (config + restart, no reinstall) |
 | `sentinel-ops azure [status\|enable\|disable]` | Configure Azure AD (Microsoft Entra ID) sign-in |
 | `sentinel-ops auth [status\|enable\|disable] <feature>` | Optional Supabase Auth hardening - see [AUTH-HARDENING.md](docs/AUTH-HARDENING.md) |
-| `sentinel-ops mdm-proxy [status\|enable\|disable\|sync-cert]` | Windows MDM on a port of its own, for a front proxy that can't request client certificates (Zoraxy) - see [WINDOWS-MDM.md](docs/WINDOWS-MDM.md) |
+| `sentinel-ops mdm-proxy [status\|enable\|disable\|sync-cert]` | Windows MDM on a port of its own, for a front proxy that can't request client certificates (Zoraxy); its certificate from Zoraxy's files or from Let's Encrypt through Cloudflare DNS (`--cloudflare`) - see [WINDOWS-MDM.md](docs/WINDOWS-MDM.md) |
 | `sentinel-ops repair [check\|apply]` | Validate `supabase/.env` for known mechanical mistakes and fix them; check/apply the backup restore grant |
 | `sentinel-ops nuke` | **Destroy this installation** so a fresh one can be tested |
 

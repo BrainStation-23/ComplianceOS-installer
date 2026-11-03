@@ -63,6 +63,9 @@ SO_SHOW_SECRETS="false"
 SO_OPT_PORT=""
 SO_OPT_CERT=""
 SO_OPT_KEY=""
+SO_OPT_CLOUDFLARE="false"
+SO_OPT_DOMAIN=""
+SO_OPT_EMAIL=""
 SO_INSTALL_DIR_OVERRIDE="${SENTINEL_OPS_DIR:-}"
 
 usage() {
@@ -119,9 +122,12 @@ Commands:
                           mistakes (CRLF, stray whitespace, duplicate keys, a
                           trailing slash on a URL); apply fixes and restart
   mdm-proxy [status|enable|disable|sync-cert] [--port N --cert FILE --key FILE]
+  mdm-proxy enable --cloudflare [--port N --domain HOST --email ADDR]
                           Windows MDM on a port of its own, for a front proxy
-                          that can't request client certificates (Zoraxy) -
-                          see docs/REVERSE-PROXY.md
+                          that can't request client certificates (Zoraxy).
+                          --cloudflare: Let's Encrypt through Cloudflare DNS,
+                          issued and renewed here (token: CLOUDFLARE_API_TOKEN
+                          or asked) - see docs/WINDOWS-MDM.md
   nuke [--keep-*]         Destroy this installation (containers, volumes,
                           database and files) so a fresh install can be tested
   version                 Print the installer version
@@ -152,6 +158,11 @@ main() {
             --cert=*)   SO_OPT_CERT="${1#*=}"; shift ;;
             --key)      SO_OPT_KEY="${2:-}"; shift 2 ;;
             --key=*)    SO_OPT_KEY="${1#*=}"; shift ;;
+            --cloudflare) SO_OPT_CLOUDFLARE="true"; shift ;;
+            --domain)   SO_OPT_DOMAIN="${2:-}"; shift 2 ;;
+            --domain=*) SO_OPT_DOMAIN="${1#*=}"; shift ;;
+            --email)    SO_OPT_EMAIL="${2:-}"; shift 2 ;;
+            --email=*)  SO_OPT_EMAIL="${1#*=}"; shift ;;
             --force)    SO_FORCE_PHASES="true"; shift ;;
             --debug)    SO_DEBUG="true"; shift ;;
             -h|--help)  usage; return 0 ;;
