@@ -33,7 +33,7 @@ CONFIG_DIR="${T}/config"; mkdir -p "$CONFIG_DIR"
 export SUPABASE_DIR="${T}/supabase"; mkdir -p "$SUPABASE_DIR"; : >"${SUPABASE_DIR}/.env"
 APP_CONTAINER_NAME="sentinel-ops-frontend"; APP_PORT=41820
 MDM_CLIENT_CERT_HEADER=""; MDM_PROXY_SECRET_HEADER=""
-MDM_PROXY_PORT=8443; MDM_PROXY_BIND="0.0.0.0"; MDM_PROXY_IMAGE="caddy:2.11.7-alpine"
+MDM_PROXY_PORT=9443; MDM_PROXY_BIND="0.0.0.0"; MDM_PROXY_IMAGE="caddy:2.11.7-alpine"
 SO_LOG_FILE=""
 
 cert() { openssl req -x509 -newkey rsa:2048 -nodes -keyout "$1" -out "$2" -days 30 -subj "/CN=$3" >/dev/null 2>&1; }
@@ -95,7 +95,7 @@ check "the container sees it" "$secret" "$(cat "$SEEN")"
 check "passed by name" "1" "$(grep -cx -- '-e' "$ARGV" >/dev/null; grep -cx -- 'MDM_PROXY_SECRET' "$ARGV")"
 check "never by value" "0" "$(grep -c -- "$secret" "$ARGV")"
 check "on the Supabase network" "1" "$(grep -cx -- 'supabase_default' "$ARGV")"
-check "publishing the MDM port" "1" "$(grep -cx -- '0.0.0.0:8443:8443' "$ARGV")"
+check "publishing the MDM port" "1" "$(grep -cx -- '0.0.0.0:9443:8443' "$ARGV")"
 check "the pinned image" "1" "$(grep -cx -- 'caddy:2.11.7-alpine' "$ARGV")"
 check "the Caddyfile is written" "1" "$(grep -c 'mode request' "${CONFIG_DIR}/mdm-proxy/Caddyfile")"
 check "the Caddyfile holds no secret" "0" "$(grep -c -- "$secret" "${CONFIG_DIR}/mdm-proxy/Caddyfile")"

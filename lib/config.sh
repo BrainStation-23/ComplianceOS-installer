@@ -68,7 +68,7 @@ MDM_PROXY_SECRET_HEADER=""
 # what needs the PC's client certificate, when the front proxy can't request
 # one (Zoraxy). The console's Settings -> MDM -> MDM port must match the port.
 MDM_PROXY_ENABLED="false"
-MDM_PROXY_PORT="8443"
+MDM_PROXY_PORT="9443"
 MDM_PROXY_BIND="0.0.0.0"
 MDM_PROXY_CERT_FILE=""
 MDM_PROXY_KEY_FILE=""
