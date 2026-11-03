@@ -19,6 +19,7 @@
 #   sentinel-ops schedule [status|enable|disable|run-now]
 #   sentinel-ops auth [status|enable|disable] [feature]   auth hardening
 #   sentinel-ops repair [check|apply]   validate/fix supabase/.env
+#   sentinel-ops mdm-proxy [status|enable|disable|sync-cert]   Windows MDM port
 #   sentinel-ops nuke               destroy this installation entirely
 #
 set -euo pipefail
@@ -44,11 +45,11 @@ SO_ASSETS_DIR="${SO_ROOT}/assets"
 # alongside the installer.
 SO_SOURCE_DIR="$SO_ROOT"
 
-for _lib in common os prereqs config supabase logflare azure hardening storage firewall repo frontend images database backup restic selfinstall repair menu; do
+for _lib in common os prereqs config supabase logflare azure hardening storage firewall repo frontend mdm_proxy images database backup restic selfinstall repair menu; do
     # shellcheck source=/dev/null
     source "${SO_LIB_DIR}/${_lib}.sh"
 done
-for _lib in install update selfupdate autoupdate status cleanup credentials maintenance backup remote schedule nuke network azure auth domain branch repair; do
+for _lib in install update selfupdate autoupdate status cleanup credentials maintenance backup remote schedule nuke network azure auth domain branch repair mdm_proxy; do
     # shellcheck source=/dev/null
     source "${SO_LIB_DIR}/commands/${_lib}.sh"
 done
@@ -58,6 +59,10 @@ unset _lib
 # Global flags
 # ---------------------------------------------------------------------------
 SO_SHOW_SECRETS="false"
+# `mdm-proxy enable` options; empty asks.
+SO_OPT_PORT=""
+SO_OPT_CERT=""
+SO_OPT_KEY=""
 SO_INSTALL_DIR_OVERRIDE="${SENTINEL_OPS_DIR:-}"
 
 usage() {
@@ -113,6 +118,10 @@ Commands:
   repair [check|apply]    Validate supabase/.env for known mechanical
                           mistakes (CRLF, stray whitespace, duplicate keys, a
                           trailing slash on a URL); apply fixes and restart
+  mdm-proxy [status|enable|disable|sync-cert] [--port N --cert FILE --key FILE]
+                          Windows MDM on a port of its own, for a front proxy
+                          that can't request client certificates (Zoraxy) -
+                          see docs/REVERSE-PROXY.md
   nuke [--keep-*]         Destroy this installation (containers, volumes,
                           database and files) so a fresh install can be tested
   version                 Print the installer version
@@ -137,6 +146,12 @@ main() {
             --dir=*)    SO_INSTALL_DIR_OVERRIDE="${1#*=}"; shift ;;
             -y|--yes)   SO_ASSUME_YES="true"; shift ;;
             --show)     SO_SHOW_SECRETS="true"; shift ;;
+            --port)     SO_OPT_PORT="${2:-}"; shift 2 ;;
+            --port=*)   SO_OPT_PORT="${1#*=}"; shift ;;
+            --cert)     SO_OPT_CERT="${2:-}"; shift 2 ;;
+            --cert=*)   SO_OPT_CERT="${1#*=}"; shift ;;
+            --key)      SO_OPT_KEY="${2:-}"; shift 2 ;;
+            --key=*)    SO_OPT_KEY="${1#*=}"; shift ;;
             --force)    SO_FORCE_PHASES="true"; shift ;;
             --debug)    SO_DEBUG="true"; shift ;;
             -h|--help)  usage; return 0 ;;
@@ -179,6 +194,7 @@ main() {
         azure)       cmd_azure "${rest[@]:-status}" ;;
         auth)        cmd_auth "${rest[@]:-status}" ;;
         repair)      cmd_repair "${rest[@]:-check}" ;;
+        mdm-proxy)   cmd_mdm_proxy "${rest[@]:-status}" ;;
         nuke)        cmd_nuke "${rest[@]:-}" ;;
         version|--version) printf 'sentinel-ops %s\n' "$SO_INSTALLER_VERSION" ;;
         help)        usage ;;

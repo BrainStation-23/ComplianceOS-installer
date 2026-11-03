@@ -137,8 +137,9 @@ rule (**Edit Custom Header**): direction *to upstream*, name
 another proxy or a CDN, `$remote_ip` is that hop's address, not the user's -
 set the header at the outermost proxy instead.
 
-Zoraxy can't serve a **Windows MDM** hostname: it can't request a PC's client
-certificate. See [Zoraxy can't serve the MDM hostname](#zoraxy-cant-serve-the-mdm-hostname).
+For **Windows MDM**, Zoraxy can't request a PC's client certificate: keep it
+as it is and run `sentinel-ops mdm-proxy enable`, which serves MDM on a port of
+its own. See [Zoraxy can't serve the MDM hostname](#zoraxy-cant-serve-the-mdm-hostname).
 
 ### nginx
 
@@ -374,8 +375,48 @@ MDM hostname's TLS through to something that can either. With Zoraxy on port
 - certificate renewal fails too, since it also authenticates with the PC's
   certificate.
 
-Until the application can take MDM traffic on a port of its own, these are
-the ways around it.
+**The supported setup: an MDM port.** Keep Zoraxy exactly as it is and give
+MDM a port of its own, served by the installer's MDM proxy: a Caddy container
+that requests the PC's certificate and forwards it, with the proxy secret, to
+the frontend. Windows always looks for discovery on 443, and discovery and the
+sign-in page need no certificate, so only what needs one moves.
+
+1. Keep Zoraxy's rule for the MDM hostname, pointing at the frontend
+   (`127.0.0.1:41820`), with its ACME certificate.
+2. Start the proxy with that certificate:
+
+   ```bash
+   sudo sentinel-ops mdm-proxy enable --port 8443      --cert <zoraxy>/conf/certs/mdm.example.com.pem      --key  <zoraxy>/conf/certs/mdm.example.com.key
+   ```
+
+   It checks the certificate and key, copies them, opens the port in
+   ufw/firewalld, and installs a daily timer that copies them again when
+   Zoraxy renews (`sentinel-ops mdm-proxy sync-cert`).
+3. In the console, **Settings → MDM → MDM port**: the same port, **before PCs
+   enroll** (a PC keeps the address it enrolled with).
+4. Open the port wherever else traffic is filtered (a cloud security group).
+5. Check it:
+
+   ```bash
+   sudo sentinel-ops mdm-proxy status
+   ```
+
+   It should show that the proxy requests client certificates, and that
+   `/ManagementServer/MDM.svc` answers 401 without one: the request reached the
+   app with the secret. A 503 means the app has no secret yet
+   (`sentinel-ops update app`).
+
+| Traffic | Port | Served by |
+|---|---|---|
+| Discovery, the sign-in page, the console, the API | 443 | Zoraxy |
+| Certificate policy, enrollment, renewal, check-ins | the MDM port | the MDM proxy |
+
+The proxy answers only those MDM paths; everything else on its port is a 404.
+A network that only lets 80 and 443 out (some guest or hotel Wi-Fi) blocks
+check-ins until the PC is back on a normal network. `sentinel-ops mdm-proxy
+disable` removes it; clear the console's MDM port too.
+
+If you'd rather keep all MDM traffic on 443, these also work:
 
 **An SNI router in front of Zoraxy.** nginx's `stream` module reads the
 hostname a connection asks for without decrypting it, passes the MDM
