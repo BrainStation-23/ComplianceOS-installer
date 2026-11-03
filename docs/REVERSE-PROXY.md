@@ -375,7 +375,8 @@ MDM hostname's TLS through to something that can either. With Zoraxy on port
 - certificate renewal fails too, since it also authenticates with the PC's
   certificate.
 
-**The supported setup: an MDM port.** Keep Zoraxy exactly as it is and give
+**The supported setup: an MDM port** (step by step, with a message for IT:
+[WINDOWS-MDM.md](WINDOWS-MDM.md)). Keep Zoraxy exactly as it is and give
 MDM a port of its own, served by the installer's MDM proxy: a Caddy container
 that requests the PC's certificate and forwards it, with the proxy secret, to
 the frontend. Windows always looks for discovery on 443, and discovery and the

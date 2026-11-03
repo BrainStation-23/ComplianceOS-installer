@@ -153,6 +153,7 @@ switches over with a config change and a restart — no reinstall.
 | `sentinel-ops domain [status\|set <hostname>]` | Point the stack at a real domain (config + restart, no reinstall) |
 | `sentinel-ops azure [status\|enable\|disable]` | Configure Azure AD (Microsoft Entra ID) sign-in |
 | `sentinel-ops auth [status\|enable\|disable] <feature>` | Optional Supabase Auth hardening - see [AUTH-HARDENING.md](docs/AUTH-HARDENING.md) |
+| `sentinel-ops mdm-proxy [status\|enable\|disable\|sync-cert]` | Windows MDM on a port of its own, for a front proxy that can't request client certificates (Zoraxy) - see [WINDOWS-MDM.md](docs/WINDOWS-MDM.md) |
 | `sentinel-ops repair [check\|apply]` | Validate `supabase/.env` for known mechanical mistakes and fix them; check/apply the backup restore grant |
 | `sentinel-ops nuke` | **Destroy this installation** so a fresh one can be tested |
 
@@ -486,6 +487,7 @@ tests for the helpers that the deployment logic depends on.
 - [docs/OPERATIONS.md](docs/OPERATIONS.md) — day-two runbook and troubleshooting
 - [docs/BACKUPS.md](docs/BACKUPS.md) — full-stack backup layout, restore flags and 3-2-1 setup
 - [docs/REVERSE-PROXY.md](docs/REVERSE-PROXY.md) — upstreams and example proxy configs
+- [docs/WINDOWS-MDM.md](docs/WINDOWS-MDM.md) — Windows MDM: what to set up, and what to ask IT
 - [docs/LOGFLARE.md](docs/LOGFLARE.md) — analytics setup, backends and variables
 - [docs/AZURE-AD.md](docs/AZURE-AD.md) — Azure AD sign-in setup and variables
 - [docs/AUTH-HARDENING.md](docs/AUTH-HARDENING.md) — optional sign-up, password, CAPTCHA and rate-limit hardening
