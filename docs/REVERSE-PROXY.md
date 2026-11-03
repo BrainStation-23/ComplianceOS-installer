@@ -279,6 +279,81 @@ least one 6 MiB upload chunk - or leave buffering off that router entirely.
 
 ---
 
+## Windows MDM hostname (client certificates)
+
+Only needed if you enroll Windows PCs in the console's MDM (**Settings → MDM**;
+the application's `docs/windows-mdm.md` covers the rest). After enrollment, a
+PC authenticates every check-in to `/ManagementServer/MDM.svc` with its device
+certificate **at the TLS layer**. TLS ends at your proxy, so on the MDM
+hostname the proxy must:
+
+1. **Request** a client certificate, but neither require nor verify one:
+   enrollment requests have none, and the application checks the certificate
+   against its own Windows device CA.
+2. **Forward** it in `X-Client-Cert`, together with the **proxy secret** in
+   `X-MDM-Proxy-Secret`. The application trusts the certificate header only
+   when the secret comes with it.
+3. **Set** both headers itself, never pass through what a client sent.
+
+The installer generates the secret on the first install or update that starts
+the frontend, keeps it in `supabase/.env`, and passes it to the container.
+Read it with:
+
+```bash
+sudo sentinel-ops credentials --show     # "Windows MDM (reverse proxy)"
+```
+
+If your proxy has to use other header names, set `MDM_CLIENT_CERT_HEADER` and
+`MDM_PROXY_SECRET_HEADER` in `config/installer.env` and run
+`sentinel-ops update app`.
+
+The MDM hostname goes to the **frontend** upstream (`127.0.0.1:41820`). Until
+the proxy forwards the certificate, enrolled PCs can't check in: the console's
+**Settings → MDM** says so when PCs are enrolled but none has checked in.
+
+### nginx
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name mdm.example.com;
+    ssl_certificate     /etc/letsencrypt/live/mdm.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/mdm.example.com/privkey.pem;
+
+    # ask for the PC's certificate, but don't verify it here
+    ssl_verify_client optional_no_ca;
+
+    location / {
+        proxy_pass http://127.0.0.1:41820;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        # proxy_set_header replaces whatever the client sent
+        proxy_set_header X-Client-Cert $ssl_client_escaped_cert;
+        proxy_set_header X-MDM-Proxy-Secret "<proxy secret>";
+    }
+}
+```
+
+### Caddy
+
+```caddy
+mdm.example.com {
+    tls {
+        client_auth {
+            mode request
+        }
+    }
+    reverse_proxy 127.0.0.1:41820 {
+        header_up X-Client-Cert {http.request.tls.client.certificate_der_base64}
+        header_up X-MDM-Proxy-Secret "<proxy secret>"
+    }
+}
+```
+
+Zoraxy and Traefik can do the same if they can request (not require) a client
+certificate and forward it in a header; the application accepts a URL-encoded
+PEM (nginx), a PEM on one line, or base64 DER (Caddy).
+
 ## Things that will bite you
 
 **WebSockets.** Supabase Realtime needs `Upgrade`/`Connection` headers and a
@@ -312,6 +387,11 @@ links fail mid-upload whatever the proxy allows.
 `config/installer.env`. Changing a domain only needs the container restarted
 with the new value (`sentinel-ops update app` does this), not a rebuild — but
 it still needs the container, not just the proxy, reloaded.
+
+**TLS offloading in front of the proxy.** A load balancer or appliance that
+terminates TLS before your proxy hides the PC's client certificate, and Windows
+MDM check-ins fail. The MDM hostname needs TLS to end at the proxy that
+forwards the certificate.
 
 **Do not expose Logflare.** Its `/dashboard` has no authentication of its own.
 Port 4000 is not published by default — keep it that way.

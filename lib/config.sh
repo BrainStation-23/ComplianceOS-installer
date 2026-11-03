@@ -58,6 +58,12 @@ AUTH_CAPTCHA_ENABLED="false"
 TURNSTILE_SITE_KEY=""
 AUTH_RATE_LIMIT_HEADER=""
 AUTH_RATE_LIMIT_TOKEN=""
+# Windows MDM (sentinel-ops#550): the headers the reverse proxy forwards the
+# client certificate and the shared secret in. Empty uses the app's defaults,
+# X-Client-Cert and X-MDM-Proxy-Secret. The secret itself lives only in
+# supabase/.env (lib/frontend.sh:frontend_mdm_proxy_secret).
+MDM_CLIENT_CERT_HEADER=""
+MDM_PROXY_SECRET_HEADER=""
 # Supabase Storage's global upload limit in bytes (lib/storage.sh). Upstream
 # ships 50 MiB; the application's installer bucket allows 4 GiB.
 STORAGE_FILE_SIZE_LIMIT="4294967296"
@@ -135,6 +141,7 @@ config_load() {
                AUTH_DISABLE_SIGNUP AUTH_PASSWORD_POLICY AUTH_PASSWORD_MIN_LENGTH \
                AUTH_HIBP_ENABLED AUTH_HIBP_FAIL_CLOSED AUTH_CAPTCHA_ENABLED \
                TURNSTILE_SITE_KEY AUTH_RATE_LIMIT_HEADER AUTH_RATE_LIMIT_TOKEN \
+               MDM_CLIENT_CERT_HEADER MDM_PROXY_SECRET_HEADER \
                STORAGE_FILE_SIZE_LIMIT IMAGE_CLEANUP_ENABLED IMAGE_BUILD_CACHE_MAX_AGE \
                BACKUP_RETENTION_COUNT \
                BACKUP_SCHEDULE_ENABLED BACKUP_SCHEDULE_CALENDAR BACKUP_SCHEDULE_CHECK_DAY \
@@ -197,6 +204,10 @@ config_save() {
         printf 'TURNSTILE_SITE_KEY=%s\n'       "$TURNSTILE_SITE_KEY"
         printf 'AUTH_RATE_LIMIT_HEADER=%s\n'   "$AUTH_RATE_LIMIT_HEADER"
         printf 'AUTH_RATE_LIMIT_TOKEN=%s\n\n'  "$AUTH_RATE_LIMIT_TOKEN"
+        printf '# Windows MDM client certificates - see docs/REVERSE-PROXY.md. Empty\n'
+        printf '# uses the app defaults; the proxy secret lives only in supabase/.env.\n'
+        printf 'MDM_CLIENT_CERT_HEADER=%s\n'    "$MDM_CLIENT_CERT_HEADER"
+        printf 'MDM_PROXY_SECRET_HEADER=%s\n\n' "$MDM_PROXY_SECRET_HEADER"
         printf '# Storage upload limit in bytes - see docs/REVERSE-PROXY.md\n'
         printf 'STORAGE_FILE_SIZE_LIMIT=%s\n\n' "$STORAGE_FILE_SIZE_LIMIT"
         printf '# Docker image cleanup after updates - see docs/OPERATIONS.md\n'

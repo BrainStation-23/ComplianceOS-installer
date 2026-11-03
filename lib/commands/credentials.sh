@@ -55,6 +55,11 @@ cmd_credentials() {
         _cred_line "Private token"  "$(env_get "$env_file" LOGFLARE_PRIVATE_ACCESS_TOKEN || true)"
     fi
 
+    section "Windows MDM (reverse proxy)"
+    _cred_line "Proxy secret"       "$(env_get "$env_file" MDM_PROXY_SECRET || true)"
+    _cred_line "Certificate header" "${MDM_CLIENT_CERT_HEADER:-X-Client-Cert}"
+    _cred_line "Secret header"      "${MDM_PROXY_SECRET_HEADER:-X-MDM-Proxy-Secret}"
+
     printf '\n'
     printf '%sThe service-role key and JWT secret grant full database access.%s\n' "$C_YELLOW" "$C_RESET"
     printf '%sNeither is ever given to the frontend build.%s\n\n' "$C_DIM" "$C_RESET"

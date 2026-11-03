@@ -214,6 +214,22 @@ frontend_bind_address() {
     printf '%s' "${APP_BIND:-127.0.0.1}"
 }
 
+# The shared secret the reverse proxy sends with a Windows PC's client
+# certificate (sentinel-ops#550): the app trusts the forwarded certificate only
+# when the secret comes with it, and answers 503 on /ManagementServer/MDM.svc
+# without one. Generated once, at least 24 characters, and kept with the other
+# secrets in supabase/.env; `sentinel-ops credentials --show` prints it for
+# the proxy's configuration (docs/REVERSE-PROXY.md).
+frontend_mdm_proxy_secret() {
+    local env_file="${SUPABASE_DIR}/.env" secret
+    secret="$(env_get "$env_file" MDM_PROXY_SECRET 2>/dev/null || true)"
+    if [[ ${#secret} -lt 24 ]]; then
+        secret="$(random_token 32)"
+        env_set "$env_file" MDM_PROXY_SECRET "$secret"
+    fi
+    printf '%s' "$secret"
+}
+
 # Start a container from an image. frontend_run_container <name> <image> <host-port>
 frontend_run_container() {
     local name="$1" image="$2" host_port="$3" network bind attached="false"
@@ -286,6 +302,15 @@ frontend_run_container() {
         -e SUPABASE_SERVICE_ROLE_KEY
         -p "${bind}:${host_port}:${APP_PORT}"
     )
+    # Windows MDM (sentinel-ops#550): the proxy secret by name, like the keys
+    # above; the header names only when the proxy uses other ones.
+    args+=(-e MDM_PROXY_SECRET)
+    if [[ -n "${MDM_CLIENT_CERT_HEADER:-}" ]]; then
+        args+=(-e "MDM_CLIENT_CERT_HEADER=${MDM_CLIENT_CERT_HEADER}")
+    fi
+    if [[ -n "${MDM_PROXY_SECRET_HEADER:-}" ]]; then
+        args+=(-e "MDM_PROXY_SECRET_HEADER=${MDM_PROXY_SECRET_HEADER}")
+    fi
     # The browser needs the Turnstile site key to render the CAPTCHA, served
     # through /runtime-config.js like the Supabase URL. It is public by design.
     if [[ "$AUTH_CAPTCHA_ENABLED" == "true" && -n "$TURNSTILE_SITE_KEY" ]]; then
@@ -296,11 +321,13 @@ frontend_run_container() {
     fi
     args+=("$image")
 
-    local rc=0
+    local rc=0 mdm_secret
+    mdm_secret="$(frontend_mdm_proxy_secret)"
     export SUPABASE_PUBLISHABLE_KEY="$pub_key"
     export SUPABASE_SERVICE_ROLE_KEY="$svc_key"
+    export MDM_PROXY_SECRET="$mdm_secret"
     run_logged "start ${name}" docker "${args[@]}" || rc=$?
-    unset SUPABASE_PUBLISHABLE_KEY SUPABASE_SERVICE_ROLE_KEY
+    unset SUPABASE_PUBLISHABLE_KEY SUPABASE_SERVICE_ROLE_KEY MDM_PROXY_SECRET
     return "$rc"
 }
 
