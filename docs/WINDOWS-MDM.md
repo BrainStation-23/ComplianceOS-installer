@@ -39,7 +39,7 @@ you don't need any of this: leave the console's MDM port empty.
 | A hostname for MDM, e.g. `mdm.example.com` | IT (DNS) | Public, and **permanent**: changing it later means every PC enrolls again. It points at the same public address as your other Sentinel Ops hostnames. |
 | A Zoraxy rule for that hostname, with a certificate | IT or you (Zoraxy) | Target: the Sentinel Ops frontend, `127.0.0.1:41820`, like the app's own rule. Issue the certificate under **TLS / SSL certificates** (ACME), as for any hostname. |
 | **Port 8443 reaching the Sentinel Ops server** | IT (network) | The one new thing. See below. |
-| The paths of Zoraxy's certificate files for the hostname | IT or you | Zoraxy keeps them as `<zoraxy>/conf/certs/mdm.example.com.pem` and `.key`. |
+| A certificate for port 8443: a **Cloudflare API token**, or the paths of Zoraxy's certificate files | IT or you | With DNS on Cloudflare, the installer gets and renews its own Let's Encrypt certificate ([below](#certificate-for-port-8443)). Otherwise, Zoraxy keeps its files as `<zoraxy>/conf/certs/mdm.example.com.pem` and `.key`. |
 | The MDM proxy, and the port in the console | You | [Below](#once-it-is-done). |
 
 You don't add anything to Zoraxy for port 8443 when Zoraxy and Sentinel Ops
@@ -70,11 +70,17 @@ Copy this, filling in your hostname:
 >      **Stream Proxy** rule (TCP, listening on 8443, to the Sentinel Ops
 >      server's 8443). It only passes the connection through; Zoraxy doesn't
 >      decrypt it.
-> 4. **Tell us where Zoraxy keeps the certificate files** for
->    `mdm.example.com` (`conf/certs/mdm.example.com.pem` and `.key`). If Zoraxy
->    runs in Docker, the path on the host. If Zoraxy is on another machine,
->    those two files need copying to the Sentinel Ops server whenever Zoraxy
->    renews them (every couple of months); a scheduled copy is fine.
+> 4. **A certificate for port 8443**, one of:
+>    - if our DNS is on Cloudflare: a Cloudflare **API token** with
+>      *Zone → DNS → Edit* on the zone of `mdm.example.com` (the "Edit zone
+>      DNS" template), and the `mdm.example.com` record set to **DNS only**
+>      (grey cloud), not proxied;
+>    - otherwise, **where Zoraxy keeps the certificate files** for
+>      `mdm.example.com` (`conf/certs/mdm.example.com.pem` and `.key`). If
+>      Zoraxy runs in Docker, the path on the host. If Zoraxy is on another
+>      machine, those two files need copying to the Sentinel Ops server
+>      whenever Zoraxy renews them (every couple of months); a scheduled copy
+>      is fine.
 > 5. **If our office network restricts outgoing ports**, allow outbound TCP 8443
 >    to `mdm.example.com`.
 
@@ -86,12 +92,43 @@ its copy itself.
 
 **Zoraxy on another machine, public address on a router or firewall**: the
 router sends 443 to Zoraxy (as today) and 8443 to the Sentinel Ops server.
-Zoraxy's certificate files have to be copied to the Sentinel Ops server when
-Zoraxy renews them; point `--cert`/`--key` at the copies.
+Use the Cloudflare certificate if you can; otherwise Zoraxy's certificate
+files have to be copied to the Sentinel Ops server when Zoraxy renews them,
+and `--cert`/`--key` point at the copies.
 
 **Zoraxy on another machine that holds the public address itself**: a Zoraxy
-Stream Proxy on 8443 forwards to the Sentinel Ops server's 8443. Copy the
-certificate files as above.
+Stream Proxy on 8443 forwards to the Sentinel Ops server's 8443. The
+certificate as above.
+
+## Certificate for port 8443
+
+PCs check the MDM proxy's certificate like any HTTPS site, so it has to be a
+public one for the MDM hostname. There are two ways to give it one.
+
+**Let's Encrypt through Cloudflare DNS** (`--cloudflare`). The installer runs
+certbot in a container (`certbot/dns-cloudflare`, pinned; nothing is installed
+on the server), proves it controls the hostname by creating a temporary TXT
+record through the Cloudflare API, and gets the certificate. No port has to
+reach this server for that, so it works wherever Zoraxy runs, and nothing is
+copied between machines. The daily timer renews it 30 days before it expires.
+
+- The API token: Cloudflare, **My Profile → API Tokens → Create Token → Edit
+  zone DNS**, limited to the one zone. It can change any record in that
+  zone, so you can also limit it to the server's outgoing IP address (**Client
+  IP Address Filtering**). The installer keeps it in
+  `config/mdm-proxy/cloudflare.ini`, readable by root only, and removes it on
+  `mdm-proxy disable`.
+- The MDM hostname's record must be **DNS only** (grey cloud). Proxied through
+  Cloudflare, Cloudflare ends the TLS connection, the PC's certificate never
+  reaches the MDM proxy, and check-ins fail.
+- Zoraxy still issues its own certificate for the hostname on 443 (discovery
+  and the sign-in page). Two certificates for one name, from two machines, is
+  fine.
+
+**Zoraxy's certificate files** (`--cert`/`--key`): the installer copies them
+and the daily timer copies them again after Zoraxy renews. Simple when Zoraxy
+is on the same server; from another machine, something has to copy the files
+over first.
 
 **Cloud server (AWS, Azure, ...)**: allow inbound TCP 8443 in the server's
 security group / network security group, as 443 is.
@@ -105,7 +142,14 @@ security group / network security group, as 443 is.
    sudo sentinel-ops self-update
    sudo sentinel-ops update app
    ```
-2. **Start the MDM proxy** with Zoraxy's certificate:
+2. **Start the MDM proxy** with a [certificate](#certificate-for-port-8443).
+   From Let's Encrypt through Cloudflare (it asks for the token):
+
+   ```bash
+   sudo sentinel-ops mdm-proxy enable --port 8443 --cloudflare --domain mdm.example.com
+   ```
+
+   Or with Zoraxy's files:
 
    ```bash
    sudo sentinel-ops mdm-proxy enable --port 8443 \
@@ -113,9 +157,13 @@ security group / network security group, as 443 is.
      --key  /path/to/zoraxy/conf/certs/mdm.example.com.key
    ```
 
-   It checks that the certificate and key belong together and haven't expired,
-   opens 8443 in the server's firewall, and starts the proxy. A daily timer
-   picks up Zoraxy's renewed certificate.
+   Without these options it asks. `--email` gives Let's Encrypt an address
+   for account notices; unattended, pass the token as `CLOUDFLARE_API_TOKEN`
+   (`sudo CLOUDFLARE_API_TOKEN=... sentinel-ops -y mdm-proxy enable --cloudflare
+   --domain ...`), never as an option. It checks that the certificate and key
+   belong together and haven't expired, opens 8443 in the server's firewall,
+   and starts the proxy. A daily timer renews the Let's Encrypt certificate, or
+   picks up Zoraxy's renewed one.
 3. **Check it**:
 
    ```bash
@@ -145,7 +193,8 @@ with, so PCs enrolled earlier keep trying 443 until they enroll again.
 |---|---|---|
 | PCs enroll, but the console says none has checked in | The MDM port isn't set in the console, or 8443 doesn't reach the server | Check **Settings → MDM** shows the check-in address with `:8443`; do step 5 above |
 | `mdm-proxy status`: "Reaches the app: 503" | The application has no proxy secret yet | `sudo sentinel-ops update app` |
-| `mdm-proxy status`: the certificate expires soon | Zoraxy's files aren't being renewed, or the copy from another machine stopped | Renew in Zoraxy (or fix the copy), then `sudo sentinel-ops mdm-proxy sync-cert` |
+| `mdm-proxy status`: the certificate expires soon | Zoraxy's files aren't being renewed, or the copy from another machine stopped; with Cloudflare, renewal is failing | Renew in Zoraxy (or fix the copy), then `sudo sentinel-ops mdm-proxy sync-cert`. With Cloudflare, run `sync-cert` and read `sentinel-ops logs installer` |
+| `mdm-proxy enable --cloudflare`: "Let's Encrypt did not issue the certificate" | The token can't edit DNS in the hostname's zone, or has expired | Check the token's zone and permission (*Zone → DNS → Edit*) and its IP filter, then enable again |
 | `mdm-proxy enable`: "the key does not belong to the certificate" | The `.pem` and `.key` are from different hostnames or renewals | Use the pair from the same Zoraxy certificate |
 | Step 5 times out | A firewall, security group or router doesn't pass 8443 | Back to IT, item 2 (or 3) |
 | Laptops at a hotel or on guest Wi-Fi stop checking in | That network only allows ports 80 and 443 out | Nothing to fix: they catch up on a normal network. The agent keeps working. |

@@ -73,6 +73,14 @@ MDM_PROXY_BIND="0.0.0.0"
 MDM_PROXY_CERT_FILE=""
 MDM_PROXY_KEY_FILE=""
 MDM_PROXY_IMAGE="caddy:2.11.7-alpine"
+# Where the proxy's certificate comes from: "files" (CERT_FILE/KEY_FILE, issued
+# elsewhere) or "cloudflare" (Let's Encrypt for MDM_PROXY_DOMAIN through a
+# Cloudflare DNS challenge, run in the certbot image). The Cloudflare token
+# lives only in config/mdm-proxy/cloudflare.ini.
+MDM_PROXY_CERT_SOURCE="files"
+MDM_PROXY_DOMAIN=""
+MDM_PROXY_ACME_EMAIL=""
+MDM_PROXY_CERTBOT_IMAGE="certbot/dns-cloudflare:v5.8.0"
 # Supabase Storage's global upload limit in bytes (lib/storage.sh). Upstream
 # ships 50 MiB; the application's installer bucket allows 4 GiB.
 STORAGE_FILE_SIZE_LIMIT="4294967296"
@@ -153,6 +161,8 @@ config_load() {
                MDM_CLIENT_CERT_HEADER MDM_PROXY_SECRET_HEADER \
                MDM_PROXY_ENABLED MDM_PROXY_PORT MDM_PROXY_BIND \
                MDM_PROXY_CERT_FILE MDM_PROXY_KEY_FILE MDM_PROXY_IMAGE \
+               MDM_PROXY_CERT_SOURCE MDM_PROXY_DOMAIN MDM_PROXY_ACME_EMAIL \
+               MDM_PROXY_CERTBOT_IMAGE \
                STORAGE_FILE_SIZE_LIMIT IMAGE_CLEANUP_ENABLED IMAGE_BUILD_CACHE_MAX_AGE \
                BACKUP_RETENTION_COUNT \
                BACKUP_SCHEDULE_ENABLED BACKUP_SCHEDULE_CALENDAR BACKUP_SCHEDULE_CHECK_DAY \
@@ -225,7 +235,13 @@ config_save() {
         printf 'MDM_PROXY_BIND=%s\n'      "$MDM_PROXY_BIND"
         printf 'MDM_PROXY_CERT_FILE=%s\n' "$MDM_PROXY_CERT_FILE"
         printf 'MDM_PROXY_KEY_FILE=%s\n'  "$MDM_PROXY_KEY_FILE"
-        printf 'MDM_PROXY_IMAGE=%s\n\n'  "$MDM_PROXY_IMAGE"
+        printf 'MDM_PROXY_IMAGE=%s\n'    "$MDM_PROXY_IMAGE"
+        printf '# files, or cloudflare (Let'"'"'s Encrypt through Cloudflare DNS). The token\n'
+        printf '# is never written here; it lives only in config/mdm-proxy/cloudflare.ini.\n'
+        printf 'MDM_PROXY_CERT_SOURCE=%s\n'     "$MDM_PROXY_CERT_SOURCE"
+        printf 'MDM_PROXY_DOMAIN=%s\n'          "$MDM_PROXY_DOMAIN"
+        printf 'MDM_PROXY_ACME_EMAIL=%s\n'      "$MDM_PROXY_ACME_EMAIL"
+        printf 'MDM_PROXY_CERTBOT_IMAGE=%s\n\n' "$MDM_PROXY_CERTBOT_IMAGE"
         printf '# Storage upload limit in bytes - see docs/REVERSE-PROXY.md\n'
         printf 'STORAGE_FILE_SIZE_LIMIT=%s\n\n' "$STORAGE_FILE_SIZE_LIMIT"
         printf '# Docker image cleanup after updates - see docs/OPERATIONS.md\n'

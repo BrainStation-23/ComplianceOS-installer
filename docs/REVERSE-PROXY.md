@@ -392,7 +392,11 @@ sign-in page need no certificate, so only what needs one moves.
 
    It checks the certificate and key, copies them, opens the port in
    ufw/firewalld, and installs a daily timer that copies them again when
-   Zoraxy renews (`sentinel-ops mdm-proxy sync-cert`).
+   Zoraxy renews (`sentinel-ops mdm-proxy sync-cert`). With DNS on
+   Cloudflare, `--cloudflare --domain mdm.example.com` gets the proxy its own
+   Let's Encrypt certificate through a DNS challenge instead and renews it,
+   with nothing to copy: the way to go when Zoraxy runs on another machine.
+   See [WINDOWS-MDM.md](WINDOWS-MDM.md#certificate-for-port-8443).
 3. In the console, **Settings → MDM → MDM port**: the same port, **before PCs
    enroll** (a PC keeps the address it enrolled with).
 4. Open the port wherever else traffic is filtered (a cloud security group).

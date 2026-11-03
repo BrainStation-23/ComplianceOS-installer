@@ -11,15 +11,83 @@
 #
 # It reaches the frontend by container name on the Supabase network, and
 # forwards the certificate with the proxy secret lib/frontend.sh generates.
-# It can't run ACME itself (the front proxy owns 80 and 443), so it serves a
-# copy of a certificate issued elsewhere, typically by Zoraxy, refreshed by a
-# daily timer.
+# It can't answer an HTTP challenge (the front proxy owns 80 and 443), so its
+# certificate comes from one of two sources (MDM_PROXY_CERT_SOURCE):
+#   files       a copy of one issued elsewhere, typically by Zoraxy
+#   cloudflare  Let's Encrypt through a Cloudflare DNS challenge, run here by
+#               a certbot container: nothing to install or copy, and it works
+#               when the front proxy is on another machine
+# Either way a daily timer refreshes it.
 # shellcheck shell=bash
 
 MDM_PROXY_CONTAINER="sentinel-ops-mdm-proxy"
 SO_MDM_CERT_UNIT="sentinel-ops-mdm-cert"
 
 mdm_proxy_dir() { printf '%s' "${CONFIG_DIR}/mdm-proxy"; }
+
+# --- Let's Encrypt through Cloudflare DNS ------------------------------------------
+# certbot keeps its account, certificates and renewal settings under
+# letsencrypt/; the API token is in cloudflare.ini (0600), mounted read-only
+# into the certbot container only, never passed on a command line.
+
+mdm_proxy_acme_dir() { printf '%s' "$(mdm_proxy_dir)/letsencrypt"; }
+mdm_proxy_cloudflare_ini() { printf '%s' "$(mdm_proxy_dir)/cloudflare.ini"; }
+
+# The certificate and key certbot keeps current for a hostname. live/ holds
+# relative symlinks into archive/, so they resolve on the host as well.
+mdm_proxy_acme_cert_file() { printf '%s/live/%s/fullchain.pem' "$(mdm_proxy_acme_dir)" "$1"; }
+mdm_proxy_acme_key_file() { printf '%s/live/%s/privkey.pem' "$(mdm_proxy_acme_dir)" "$1"; }
+
+mdm_proxy_valid_hostname() {
+    [[ "$1" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$ ]]
+}
+
+# The stored token, or nothing.
+mdm_proxy_cloudflare_token() {
+    sed -n 's/^dns_cloudflare_api_token *= *//p' "$(mdm_proxy_cloudflare_ini)" 2>/dev/null | head -n 1
+}
+
+mdm_proxy_cloudflare_save_token() {
+    local ini
+    ini="$(mdm_proxy_cloudflare_ini)"
+    mkdir -p "$(mdm_proxy_dir)"
+    ( umask 077; printf 'dns_cloudflare_api_token = %s\n' "$1" >"$ini" )
+    chmod 600 "$ini"
+}
+
+# mdm_proxy_certbot <certbot arguments...>: one run of the pinned certbot
+# image with the Cloudflare plugin.
+mdm_proxy_certbot() {
+    # docker would bind-mount a missing file as a new, empty directory
+    [[ -f "$(mdm_proxy_cloudflare_ini)" ]] || { log_error "No Cloudflare token: run sentinel-ops mdm-proxy enable --cloudflare"; return 1; }
+    mkdir -p "$(mdm_proxy_acme_dir)"
+    chmod 700 "$(mdm_proxy_acme_dir)"
+    run_logged "certbot $1" docker run --rm \
+        -v "$(mdm_proxy_acme_dir):/etc/letsencrypt" \
+        -v "$(mdm_proxy_cloudflare_ini):/cloudflare.ini:ro" \
+        "$MDM_PROXY_CERTBOT_IMAGE" "$@"
+}
+
+# Issues the certificate for MDM_PROXY_DOMAIN, or keeps the current one while
+# it has more than 30 days left (so enabling again doesn't spend Let's
+# Encrypt's rate limit).
+mdm_proxy_acme_issue() {
+    local contact=(--register-unsafely-without-email)
+    [[ -n "$MDM_PROXY_ACME_EMAIL" ]] && contact=(--email "$MDM_PROXY_ACME_EMAIL")
+    mdm_proxy_certbot certonly --non-interactive --agree-tos "${contact[@]}" \
+        --dns-cloudflare \
+        --dns-cloudflare-credentials /cloudflare.ini \
+        --dns-cloudflare-propagation-seconds 30 \
+        --cert-name "$MDM_PROXY_DOMAIN" -d "$MDM_PROXY_DOMAIN" \
+        --keep-until-expiring
+}
+
+# Renews it when it is within 30 days of expiring; otherwise does nothing.
+# The renewal settings certbot saved at issue time name /cloudflare.ini,
+# which is where mdm_proxy_certbot mounts the token every time.
+mdm_proxy_acme_renew() {
+    mdm_proxy_certbot renew --non-interactive --cert-name "$MDM_PROXY_DOMAIN"
+}
 
 # The paths the app serves on the MDM port: the certificate policy,
 # enrollment (and its renewal) and check-ins. Discovery and the sign-in page

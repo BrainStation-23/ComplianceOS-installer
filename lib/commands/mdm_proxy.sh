@@ -5,6 +5,8 @@
 #
 #   sentinel-ops mdm-proxy status
 #   sentinel-ops mdm-proxy enable [--port N] [--cert FILE] [--key FILE]
+#   sentinel-ops mdm-proxy enable [--port N] --cloudflare [--domain HOST] [--email ADDR]
+#                                 (the token: CLOUDFLARE_API_TOKEN, or asked)
 #   sentinel-ops mdm-proxy disable
 #   sentinel-ops mdm-proxy sync-cert      (the daily timer runs this)
 # shellcheck shell=bash
@@ -20,11 +22,21 @@ _mdm_proxy_status() {
     else
         status_line "Container" "bad" "Not running - try: sentinel-ops mdm-proxy enable"
     fi
-    local days subject
+    local days subject renewing="is ${MDM_PROXY_CERT_FILE} renewing?"
+    if [[ "$MDM_PROXY_CERT_SOURCE" == "cloudflare" ]]; then
+        renewing="see: sentinel-ops mdm-proxy sync-cert"
+        if [[ -n "$(mdm_proxy_cloudflare_token)" ]]; then
+            status_line "Certificate source" "ok" "Let's Encrypt for ${MDM_PROXY_DOMAIN} through Cloudflare DNS, renewed here"
+        else
+            status_line "Certificate source" "bad" "No Cloudflare token, so no renewals - run: sentinel-ops mdm-proxy enable --cloudflare"
+        fi
+    else
+        status_line "Certificate source" "ok" "Copied from ${MDM_PROXY_CERT_FILE}"
+    fi
     subject="$(openssl x509 -in "$(mdm_proxy_dir)/tls/cert.pem" -noout -subject 2>/dev/null | sed 's/^subject= *//')"
     if days="$(mdm_proxy_cert_days_left)"; then
         if (( days < 14 )); then
-            status_line "Certificate" "warn" "${subject:-?}, expires in ${days} days - is ${MDM_PROXY_CERT_FILE} renewing?"
+            status_line "Certificate" "warn" "${subject:-?}, expires in ${days} days - ${renewing}"
         else
             status_line "Certificate" "ok" "${subject:-?}, ${days} days left"
         fi
@@ -53,18 +65,51 @@ _mdm_proxy_enable() {
     section "Windows MDM proxy"
     printf 'Windows PCs check in with a client certificate. When the proxy on 443\n'
     printf "can't request one (Zoraxy), this proxy takes a port of its own for them;\n"
-    printf 'discovery stays on 443. Use the certificate your front proxy issued for the\n'
-    printf "MDM hostname (Zoraxy: <zoraxy>/conf/certs/<hostname>.pem and .key).\n\n"
+    printf 'discovery stays on 443. Its certificate for the MDM hostname comes either\n'
+    printf "from Let's Encrypt through a Cloudflare DNS challenge, issued and renewed\n"
+    printf 'here (works wherever the front proxy runs), or from files your front proxy\n'
+    printf 'issued (Zoraxy: <zoraxy>/conf/certs/<hostname>.pem and .key).\n\n'
+
+    [[ "$SO_OPT_CLOUDFLARE" == "true" && -n "${SO_OPT_CERT}${SO_OPT_KEY}" ]] \
+        && die "Use either --cloudflare or --cert/--key, not both."
+    local cert_source="${MDM_PROXY_CERT_SOURCE:-files}"
+    if [[ "$SO_OPT_CLOUDFLARE" == "true" ]]; then
+        cert_source="cloudflare"
+    elif [[ -n "${SO_OPT_CERT}${SO_OPT_KEY}" ]]; then
+        cert_source="files"
+    else
+        prompt_default cert_source "Certificate: cloudflare (Let's Encrypt through Cloudflare DNS) or files (from your front proxy)" "$cert_source"
+    fi
+    [[ "$cert_source" == "cloudflare" || "$cert_source" == "files" ]] || die "The certificate source is cloudflare or files, not '${cert_source}'."
 
     local port="${SO_OPT_PORT:-$MDM_PROXY_PORT}" cert="${SO_OPT_CERT:-$MDM_PROXY_CERT_FILE}" key="${SO_OPT_KEY:-$MDM_PROXY_KEY_FILE}"
     [[ -n "$SO_OPT_PORT" ]] || prompt_default port "Port for Windows MDM" "$port"
-    [[ -n "$SO_OPT_CERT" ]] || prompt_default cert "Certificate (PEM, with its chain) for the MDM hostname" "$cert"
-    [[ -n "$SO_OPT_KEY" ]] || prompt_default key "Its private key" "$key"
-
     [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1024 && port <= 65535 && port != 8000 && port != APP_PORT )) \
         || die "Pick a port from 1024 to 65535 that nothing else here uses (not 443, 8000 or ${APP_PORT})."
     if [[ "$port" != "$MDM_PROXY_PORT" || "$MDM_PROXY_ENABLED" != "true" ]] && port_in_use "$port"; then
         die "Port ${port} is already in use on this host."
+    fi
+
+    if [[ "$cert_source" == "cloudflare" ]]; then
+        local domain="${SO_OPT_DOMAIN:-$MDM_PROXY_DOMAIN}" email="${SO_OPT_EMAIL:-$MDM_PROXY_ACME_EMAIL}" token
+        [[ -n "$SO_OPT_DOMAIN" ]] || prompt_default domain "MDM hostname (a Cloudflare DNS record, proxy status DNS only)" "$domain"
+        mdm_proxy_valid_hostname "$domain" || die "'${domain}' is not a hostname like mdm.example.com."
+        [[ -n "$SO_OPT_EMAIL" ]] || prompt_default email "Email for Let's Encrypt account notices (blank for none)" "$email"
+        # never a flag: a token on the command line lands in shell history
+        token="${CLOUDFLARE_API_TOKEN:-}"
+        [[ -n "$token" ]] || prompt_secret token "Cloudflare API token (Zone -> DNS -> Edit on the zone of ${domain})" "$(mdm_proxy_cloudflare_token)"
+        [[ -n "$token" ]] || die "A Cloudflare API token is needed: set CLOUDFLARE_API_TOKEN, or run this interactively."
+        mdm_proxy_cloudflare_save_token "$token"
+        MDM_PROXY_DOMAIN="$domain"
+        MDM_PROXY_ACME_EMAIL="$email"
+        log_info "Requesting a certificate for ${domain} from Let's Encrypt (DNS challenge, about a minute)..."
+        mdm_proxy_acme_issue \
+            || die "Let's Encrypt did not issue the certificate. Check that the token can edit DNS in ${domain}'s zone; details: sentinel-ops logs installer"
+        cert="$(mdm_proxy_acme_cert_file "$domain")"
+        key="$(mdm_proxy_acme_key_file "$domain")"
+    else
+        [[ -n "$SO_OPT_CERT" ]] || prompt_default cert "Certificate (PEM, with its chain) for the MDM hostname" "$cert"
+        [[ -n "$SO_OPT_KEY" ]] || prompt_default key "Its private key" "$key"
     fi
     local why
     why="$(mdm_proxy_check_pair "$cert" "$key")" || die "$why"
@@ -72,9 +117,12 @@ _mdm_proxy_enable() {
     local old_port="$MDM_PROXY_PORT" was="$MDM_PROXY_ENABLED"
     MDM_PROXY_ENABLED="true"
     MDM_PROXY_PORT="$port"
+    MDM_PROXY_CERT_SOURCE="$cert_source"
     MDM_PROXY_CERT_FILE="$cert"
     MDM_PROXY_KEY_FILE="$key"
     config_save
+    # a token left from an earlier cloudflare setup would only be a liability
+    [[ "$cert_source" == "files" ]] && rm -f "$(mdm_proxy_cloudflare_ini)"
 
     mdm_proxy_sync_cert >/dev/null || die "Could not copy the certificate."
     mdm_proxy_start || die "The MDM proxy did not start."
@@ -99,15 +147,22 @@ _mdm_proxy_disable() {
     fi
     MDM_PROXY_ENABLED="false"
     config_save
+    # It can edit DNS for the whole zone; enabling again asks for it.
+    rm -f "$(mdm_proxy_cloudflare_ini)"
     log_ok "MDM proxy stopped. Clear Settings -> MDM -> MDM port in the console too, or PCs that enroll can't check in."
     return 0
 }
 
 # Refresh the served certificate from its source; restart only when it changed
-# (Caddy doesn't watch its certificate files).
+# (Caddy doesn't watch its certificate files). With Let's Encrypt, renew it
+# first; certbot does nothing until 30 days before expiry.
 _mdm_proxy_sync_cert() {
     [[ "$MDM_PROXY_ENABLED" == "true" ]] || { log_info "The MDM proxy is off."; return 0; }
-    local result
+    local result renewed=0
+    if [[ "$MDM_PROXY_CERT_SOURCE" == "cloudflare" ]] && ! mdm_proxy_acme_renew; then
+        log_warn "Let's Encrypt renewal failed; serving the current certificate. Details: sentinel-ops logs installer"
+        renewed=1
+    fi
     result="$(mdm_proxy_sync_cert)" || return 1
     if [[ "$result" == "changed" ]]; then
         mdm_proxy_start || return 1
@@ -115,7 +170,8 @@ _mdm_proxy_sync_cert() {
     else
         log_info "MDM proxy certificate unchanged"
     fi
-    return 0
+    # a failed renewal fails the timer's run, so systemctl shows it
+    return "$renewed"
 }
 
 cmd_mdm_proxy() {
