@@ -12,6 +12,7 @@ set -uo pipefail
 ROOT="${1:-$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 source "${ROOT}/lib/common.sh"
 source "${ROOT}/lib/supabase.sh"
+source "${ROOT}/lib/container_logs.sh"
 source "${ROOT}/lib/frontend.sh"
 source "${ROOT}/lib/mdm_proxy.sh"
 
@@ -99,6 +100,7 @@ check "never by value" "0" "$(grep -c -- "$secret" "$ARGV")"
 check "on the Supabase network" "1" "$(grep -cx -- 'supabase_default' "$ARGV")"
 check "publishing the MDM port" "1" "$(grep -cx -- '0.0.0.0:9443:8443' "$ARGV")"
 check "the pinned image" "1" "$(grep -cx -- 'caddy:2.11.7-alpine' "$ARGV")"
+check "the container's log has a size limit" "1" "$(grep -cx -- 'max-size=50m' "$ARGV")"
 check "the Caddyfile is written" "1" "$(grep -c 'mode request' "${CONFIG_DIR}/mdm-proxy/Caddyfile")"
 check "the Caddyfile holds no secret" "0" "$(grep -c -- "$secret" "${CONFIG_DIR}/mdm-proxy/Caddyfile")"
 

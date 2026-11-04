@@ -34,6 +34,7 @@ _status_system() {
         status_line "Docker Compose" "bad" "Unavailable"
     fi
     docker_daemon_ok 2>/dev/null && images_disk_status
+    installation_exists && disk_install_status
 
     status_line "Installer" "" "$(state_get INSTALLER_VERSION "$SO_INSTALLER_VERSION")"
     status_line "Install dir" "" "$INSTALL_DIR"
@@ -123,7 +124,11 @@ _status_backups() {
         status_line "Latest local backup" "bad" "None yet - see: sentinel-ops backup create"
     fi
     count="$(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"
-    status_line "Local retention" "" "${count} kept (limit ${BACKUP_RETENTION_COUNT})"
+    local cap cap_text="no size limit"
+    cap="$(backup_retention_max_bytes 2>/dev/null)"
+    [[ -n "$cap" ]] && cap_text="$(human_bytes "$cap")"
+    status_line "Local retention" "" \
+        "${count} kept, $(human_bytes "$(disk_used_bytes "$BACKUP_DIR")") (limit $(backup_retention_count 2>/dev/null), ${cap_text})"
 
     local role last_backup last_check
     for role in secondary offsite; do

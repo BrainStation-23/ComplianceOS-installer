@@ -22,8 +22,19 @@ _repair_check() {
         printf '\nRun `sentinel-ops repair apply` to fix these and restart the affected services.\n'
     fi
     _repair_check_storage
+    _repair_check_container_logs
     _repair_check_database
     return 0
+}
+
+# Without the overlay, the Supabase containers' logs grow without limit.
+_repair_check_container_logs() {
+    section "Container logs"
+    if container_logs_overlay_registered; then
+        status_line "Size limit" "ok" "Overlay registered ($(container_log_max_files) x $(container_log_max_size) per service)"
+    else
+        status_line "Size limit" "warn" "Overlay missing; Supabase container logs grow without limit. Run: sentinel-ops repair apply"
+    fi
 }
 
 # Without the overlay, Storage is back on upstream's 50 MiB upload limit.
@@ -95,6 +106,16 @@ _repair_apply() {
         log_ok "Re-applied the storage upload limit ($(human_bytes "$(storage_file_size_limit)"))"
     fi
 
+    # Logging is part of a container's definition, so it takes recreating the
+    # containers - `up -d` recreates only those whose logging changed.
+    local before_logs restart_stack="false"
+    before_logs="$(_container_logs_fingerprint)"
+    container_logs_apply_config >/dev/null || log_warn "The container log limits could not be re-applied."
+    if [[ "$before_logs" != "$(_container_logs_fingerprint)" ]]; then
+        restart_stack="true"
+        log_ok "Re-applied the container log limits ($(container_log_max_files) x $(container_log_max_size) per service)"
+    fi
+
     # A database grant takes effect immediately; it needs no restart.
     if _db_container >/dev/null 2>&1; then
         db_ensure_replication_role_grant || true
@@ -102,7 +123,15 @@ _repair_apply() {
         log_warn "The database container is not running; skipped the backup restore grant."
     fi
 
-    if [[ "$restart_storage" == "true" ]]; then
+    # Recreating the stack also recreates storage with its new limit.
+    if [[ "$restart_stack" == "true" ]]; then
+        log_info "Recreating the Supabase containers so the log limits take effect..."
+        if supabase_restart && supabase_health_check 180; then
+            log_ok "Supabase recreated with the container log limits"
+        else
+            log_warn "Supabase is not fully healthy after recreating it; check: sentinel-ops status"
+        fi
+    elif [[ "$restart_storage" == "true" ]]; then
         if storage_restart; then
             log_ok "Storage restarted with the new upload limit"
         else
@@ -111,7 +140,7 @@ _repair_apply() {
     fi
 
     if [[ "$changed" != "true" ]]; then
-        [[ "$restart_storage" == "true" ]] || log_info "Nothing to restart."
+        [[ "$restart_storage" == "true" || "$restart_stack" == "true" ]] || log_info "Nothing to restart."
         return 0
     fi
 

@@ -142,10 +142,10 @@ switches over with a config change and a restart — no reinstall.
 | `sentinel-ops branch [status\|set <name>]` | Choose the application branch to deploy (e.g. `dev`); `update` and auto-update follow it - see [OPERATIONS.md](docs/OPERATIONS.md#deploying-a-different-branch) |
 | `sentinel-ops status` | Health and version of every component |
 | `sentinel-ops credentials` | Show generated credentials (masked; `--show` to reveal) |
-| `sentinel-ops backup [create\|list\|verify]` | Full-stack backups (database, Storage, functions, config) |
+| `sentinel-ops backup [create\|list\|verify]` | Full-stack backups (database, Storage, functions, config); `--scope=db` leaves Storage out - see [BACKUPS.md](docs/BACKUPS.md) |
 | `sentinel-ops restore [backup] [--scope\|--from]` | Restore a backup (latest local if omitted) - see [BACKUPS.md](docs/BACKUPS.md) |
 | `sentinel-ops rollback` | Roll the application back to the previous image |
-| `sentinel-ops cleanup [--dry-run]` | Remove superseded Docker images (also done after every update) - see [OPERATIONS.md](docs/OPERATIONS.md#disk-space-and-old-images) |
+| `sentinel-ops cleanup [--dry-run]` | Free disk space: backups past retention, old installer logs, superseded Docker images (also done after every update) - see [OPERATIONS.md](docs/OPERATIONS.md#disk-space) |
 | `sentinel-ops logs <target>` | `app`, `supabase`, `logflare`, `installer` |
 | `sentinel-ops remote [status\|secondary\|offsite]` | Configure the 3-2-1 replication targets - see [BACKUPS.md](docs/BACKUPS.md) |
 | `sentinel-ops schedule [status\|enable\|disable\|run-now]` | Run backups on a systemd timer - see [BACKUPS.md](docs/BACKUPS.md) |
@@ -154,7 +154,7 @@ switches over with a config change and a restart — no reinstall.
 | `sentinel-ops azure [status\|enable\|disable]` | Configure Azure AD (Microsoft Entra ID) sign-in |
 | `sentinel-ops auth [status\|enable\|disable] <feature>` | Optional Supabase Auth hardening - see [AUTH-HARDENING.md](docs/AUTH-HARDENING.md) |
 | `sentinel-ops mdm-proxy [status\|enable\|disable\|sync-cert]` | Windows MDM check-ins on a port of their own (they need the PC's client certificate, and enrollment on 443 must not be asked for one); its certificate from Zoraxy's files or from Let's Encrypt through Cloudflare DNS (`--cloudflare`) - see [WINDOWS-MDM.md](docs/WINDOWS-MDM.md) |
-| `sentinel-ops repair [check\|apply]` | Validate `supabase/.env` for known mechanical mistakes and fix them; check/apply the backup restore grant |
+| `sentinel-ops repair [check\|apply]` | Validate `supabase/.env` for known mechanical mistakes and fix them; check/apply the backup restore grant, the storage upload limit and the container log limits |
 | `sentinel-ops nuke` | **Destroy this installation** so a fresh one can be tested |
 
 Global options: `--dir <path>`, `--yes`, `--show`, `--force`, `--debug`.

@@ -111,7 +111,7 @@ cmd_update_app() {
     phase_end
 
     phase_begin "Database migrations"
-    backup_create_full "pre-app-update" >/dev/null || log_warn "Backup failed; continuing."
+    backup_create "pre-app-update" db >/dev/null || log_warn "Backup failed; continuing."
     deploy_migrations || die "Migration failed. The running deployment was not modified."
     phase_end
 
@@ -136,6 +136,7 @@ cmd_update_app() {
     # removed from under a deployment that did not finish.
     phase_begin "Removing superseded images"
     images_cleanup_after_app_update
+    logs_prune_installer || true
     phase_end
 
     printf '\n'
@@ -168,7 +169,7 @@ cmd_update_supabase() {
     # Postgres major version or run its own schema migrations.
     phase_begin "Database backup"
     local backup_dir
-    if ! backup_dir="$(backup_create_full "pre-supabase-update")"; then
+    if ! backup_dir="$(backup_create "pre-supabase-update")"; then
         die "Refusing to update Supabase without a successful backup."
     fi
     phase_end
@@ -196,6 +197,9 @@ cmd_update_supabase() {
     # Upstream's refreshed docker-compose.yml brings back its 50 MiB storage
     # limit; the overlay that raises it must stay registered.
     storage_apply_config || log_warn "Could not re-apply the storage upload limit."
+    # Upstream may have added or removed services; every one needs its log
+    # limited. The restart below applies it.
+    container_logs_apply_config || log_warn "Could not re-apply the container log limits."
     phase_end
 
     phase_begin "Pulling images"
@@ -228,6 +232,7 @@ cmd_update_supabase() {
 
     phase_begin "Removing superseded images"
     images_cleanup_after_supabase_update
+    logs_prune_installer || true
     phase_end
 
     printf '\n'

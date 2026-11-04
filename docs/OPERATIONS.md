@@ -55,6 +55,10 @@ too (`journalctl -u sentinel-ops-autoupdate`).
   while an auto-update is running refuses with a message rather than
   interleaving with it. An auto-update that finds a manual one running skips
   that cycle.
+- **Low disk space skips the update.** While less than
+  `AUTO_UPDATE_MIN_FREE_GB` (default 5) is free on the installation's or
+  Docker's filesystem, the cycle logs an error and does nothing. It tries
+  again on the next cycle. `0` turns this check off.
 - Disabling stops future checks. An update already in progress is left to
   finish.
 
@@ -138,9 +142,10 @@ sentinel-ops restore 2026-09-11-121500     # or omit for the latest
 ```
 
 Backups are taken automatically before the first migration run, before every
-application update, before every Supabase update and before any restore, and
-capture the whole stack (database, Storage files, edge functions and the
-config needed to rebuild the install) — not just the database.
+application update, before every Supabase update and before any restore. A
+full backup captures the whole stack (database, Storage files, edge functions
+and the config needed to rebuild the install). The backups before an
+application update leave Storage out, since those updates never touch it.
 
 > `restore` replaces the current database contents. It takes a safety copy of
 > the current state first, so a bad restore is still recoverable.
@@ -149,7 +154,57 @@ See [BACKUPS.md](BACKUPS.md) for the full backup layout, retention, restore
 flags, and setting up a real 3-2-1 setup (a second local/attached copy plus an
 offsite one, both replicated by [restic](https://restic.net) on a schedule).
 
-## Disk space and old images
+## Disk space
+
+Everything the installation writes has a limit:
+
+| What | Limit | Setting (`config/installer.env`) |
+|---|---|---|
+| Local backups | count and total size, oldest removed first - see [BACKUPS.md](BACKUPS.md#retention) | `BACKUP_RETENTION_COUNT` (10), `BACKUP_RETENTION_MAX_GB` (`auto`: a fifth of the disk) |
+| Container logs (Supabase, frontend, MDM proxy) | files per container, each at most this size | `CONTAINER_LOG_MAX_FILES` (3), `CONTAINER_LOG_MAX_SIZE` (`50m`) |
+| Installer logs in `logs/` | removed after this many days | `LOG_RETENTION_DAYS` (30; `0` keeps them) |
+| Docker images and build cache | see below | `IMAGE_CLEANUP_ENABLED`, `IMAGE_BUILD_CACHE_MAX_AGE` |
+
+`sentinel-ops cleanup` applies all of them at once: it prunes backups past
+retention, removes old installer logs and removes superseded images.
+`--dry-run` shows what would go. Updates do the same after they succeed.
+
+```bash
+sudo sentinel-ops cleanup --dry-run
+sudo sentinel-ops cleanup
+```
+
+`sentinel-ops status` shows free space where Docker keeps its data (and warns
+below 10%), how much of the image store is reclaimable, and how much
+`backups/` and `logs/` hold.
+
+### Container logs
+
+Docker keeps a container's output forever unless told otherwise, and Supabase's
+containers write a lot of it. The Supabase stack gets its limit from a
+generated Compose overlay, `supabase/docker-compose.sentinel-logging.yml`,
+registered in `COMPOSE_FILE` like the storage and auth overlays. The frontend
+and MDM proxy containers get it on their `docker run` command line.
+`/etc/docker/daemon.json` is not changed, so other containers on the host keep
+their own settings.
+
+A changed limit only applies to a recreated container. `install`,
+`update supabase` and `repair apply` regenerate the overlay and recreate what
+changed. The frontend picks up a change on its next deployment.
+`sentinel-ops repair check` reports a missing overlay.
+
+On an installation from before the limit existed:
+
+```bash
+sudo sentinel-ops self-update
+sudo sentinel-ops repair apply     # writes the overlay and recreates the Supabase containers
+sudo sentinel-ops cleanup
+```
+
+Recreating the containers starts their logs from empty. The old, unlimited log
+files are removed along with the old containers.
+
+### Old images
 
 Every update leaves images behind: each application build is tagged
 `sentinel-ops:<commit>`, and each Supabase update pulls new versions of a dozen
@@ -166,16 +221,8 @@ removal is never forced. Images from other repositories (your reverse proxy,
 other workloads) are never touched. A failed update removes nothing, and a
 cleanup problem is only a warning: it never fails the update.
 
-To see what would go, or to clean up an installation that built up images
-before this existed:
-
-```bash
-sudo sentinel-ops cleanup --dry-run
-sudo sentinel-ops cleanup
-```
-
-`sentinel-ops status` shows free space where Docker keeps its data (and warns
-below 10%) along with how much of the image store is reclaimable.
+An installation that built up images before this existed is cleaned up by
+`sentinel-ops cleanup` as above.
 
 Two things to know on a shared host:
 

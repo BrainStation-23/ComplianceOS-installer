@@ -812,3 +812,74 @@ state, never on a failed or rolled-back one, so the operator still has every
 image to investigate with. A cleanup problem is logged as a warning and never
 fails the update. `IMAGE_CLEANUP_ENABLED=false` turns the automatic step off,
 and `sentinel-ops cleanup [--dry-run]` runs it on demand under the update lock.
+
+## 34. Backups before an app update leave Storage out, retention also caps size, and container logs are capped by an overlay
+
+A host filled its disk. Images were already cleaned up (33), but three other
+things grew with no size limit:
+
+- **Backups.** Every `update app`, including every auto-update, took a full
+  backup, and a full backup archives all of `supabase/volumes/storage`. That
+  holds App Catalog installers of up to 4 GiB each, already compressed, so
+  gzip barely shrinks them. With retention counting backups (10) and ignoring
+  their size, the disk held ten copies of Storage, refreshed on every deploy.
+- **Container logs.** Docker's default `json-file` driver keeps a container's
+  output forever, and upstream's compose file sets no limit.
+- **Installer logs.** One file per update, cleanup and run, never removed.
+
+**Backups.** An application update changes the database, edge functions and
+frontend, never Storage. So `backup_create` takes a scope, and the backup
+before `update app` (and before the first migration run) is `db`: everything
+but `storage.tar.gz`. A Supabase update, the schedule and `backup create` stay
+`full`. A pre-restore safety backup matches the restore's scope. The scope is
+recorded in `metadata.txt`. A backup without one predates scopes and was full.
+
+Retention keeps `BACKUP_RETENTION_COUNT` and adds `BACKUP_RETENTION_MAX_GB`
+(default `auto`, a fifth of the backup filesystem): the oldest go until the
+rest fit. The newest backup and the newest full backup are never removed. The
+latter is the only local copy of Storage, and a week of database-only
+backups must not push it out. That lets the count or size limit be exceeded,
+and the alternative, a set of backups with no Storage in it, is worse.
+
+Before writing anything, a backup estimates its size (`pg_database_size` of
+every database, plus `du` of Storage for a full one) and refuses to start
+without that, 10% and 1 GiB to spare. A backup that half-fills the last of
+the disk takes Postgres down with it. Where a backup failure was already
+non-fatal (before `update app`), this is a warning like any other.
+
+A failed `tar` now fails the backup and removes its directory. It used to be
+a warning, leaving a truncated archive that `checksums.txt` then vouched for,
+so `backup verify` passed a corrupt backup. On a full disk that is the backup
+someone reaches for.
+
+**Container logs.** The limit goes in a generated Compose overlay,
+`docker-compose.sentinel-logging.yml`, registered in `COMPOSE_FILE` like the
+storage and auth overlays (28, 32), and in `--log-opt` arguments for the
+frontend and MDM proxy containers. `/etc/docker/daemon.json` would have been
+one line, but it changes every container on the host (a Zoraxy container, say)
+and needs a Docker restart, which is not this installer's call to make.
+
+Compose has no "every service" key, so the overlay names each one. The list
+comes from `docker compose config --services`, read with every overlay but
+this one. Otherwise, once upstream drops a service, the stale overlay would
+make Compose refuse the very config the overlay is regenerated from. It is
+regenerated where the service list can change: install (before and after the
+analytics overlay adds `analytics` and `vector`), `update supabase` and
+`repair apply`. The driver stays `json-file`, which `vector` still reads
+through the Docker API.
+
+**Installer logs** older than `LOG_RETENTION_DAYS` (30) are removed after
+updates and by `cleanup`.
+
+**Auto-update** skips a cycle, without holding the commit, while less than
+`AUTO_UPDATE_MIN_FREE_GB` (5) is free where it would write. An unattended
+update that builds an image and takes a backup on a nearly full disk is how
+the disk ends up full.
+
+`sentinel-ops cleanup` covers all of it, since it should be the one command
+for an operator who is out of space. Backups and logs are pruned even when
+Docker is down, which on a full disk it may well be.
+
+Not done: Logflare's analytics tables live in Postgres and grow with it,
+making every `database.sql` bigger too. That needs a retention setting inside
+Logflare, which is worth adding only if the dump turns out to be large.

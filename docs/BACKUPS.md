@@ -1,14 +1,16 @@
 # Backups and 3-2-1
 
-A default install takes local, full-stack backups automatically (before every
-migration run, application update, Supabase update and restore). This page
+A default install takes local backups automatically: a full-stack one before
+every Supabase update, and a database-only one before every migration run and
+application update (see [Full and database-only
+backups](#full-and-database-only-backups)). This page
 covers the full layout, how to restore any scope from any copy, and how to
 turn that into a real **3-2-1** setup: 3 copies of your backups, on 2
 different media, with 1 of them offsite.
 
 ```bash
-sentinel-ops backup create              # take one now
-sentinel-ops backup list                # what's on disk
+sentinel-ops backup create              # take one now (--scope=db to leave Storage out)
+sentinel-ops backup list                # what's on disk: size, scope, reason
 sentinel-ops backup verify              # checksum the latest (or a given one)
 sentinel-ops restore                    # restore the latest local backup
 ```
@@ -21,7 +23,7 @@ enough to rebuild the whole install on a fresh box — not just the database:
 ```
 /opt/sentinel-ops/backups/2026-09-11-121500/
 ├── database.sql       pg_dumpall --clean --if-exists (roles and all databases)
-├── storage.tar.gz      Supabase Storage's uploaded objects
+├── storage.tar.gz      Supabase Storage's uploaded objects (full backups only)
 ├── functions.tar.gz    the deployed edge functions
 ├── config.tar.gz        supabase/.env + installer.env + the deploy key (chmod 600)
 ├── checksums.txt        sha256 of every file above
@@ -33,16 +35,51 @@ keys) — it's chmod 600 the moment it's written, and restoring it is a
 separate, explicitly-confirmed step (see below) because it invalidates every
 current session and issued token.
 
-Local retention is count-based: `BACKUP_RETENTION_COUNT` (default 10, in
-`config/installer.env`) — the oldest cycles are pruned once that limit is
-passed.
+If any archive cannot be written (a full disk, say), the whole backup is
+discarded and the backup fails. A truncated archive is never kept with a
+checksum that vouches for it.
+
+### Full and database-only backups
 
 `storage.tar.gz` grows with everything uploaded to Storage, including App
 Catalog installers, which can be up to 4 GiB each (see
-`STORAGE_FILE_SIZE_LIMIT`). Every local cycle holds a full copy, so size
-`BACKUP_RETENTION_COUNT` and the disk under `backups/` with that in mind; restic
-deduplicates unchanged objects across its own snapshots, so the 3-2-1 copies
-grow by what changed, not by the full size each time.
+`STORAGE_FILE_SIZE_LIMIT`). Copying all of it before every application update,
+which only changes the database, edge functions and frontend, is what used to
+fill disks, so backups come in two scopes:
+
+| Scope | Contains | Taken |
+|---|---|---|
+| `full` | everything above | before `update supabase`, on the schedule, `backup create`, before a `--scope=full` restore |
+| `db` | everything but `storage.tar.gz` | before `update app` (and so every auto-update), before the first migration run, before a database restore |
+
+`backup list` shows each backup's scope. Restoring `--scope=full` from a
+database-only backup restores the database, functions and (if confirmed)
+config, and leaves Storage files as they are, with a warning.
+
+### Retention
+
+Two limits in `config/installer.env` apply after every backup, and on
+`sentinel-ops cleanup`:
+
+- `BACKUP_RETENTION_COUNT` (default 10): keep at most this many.
+- `BACKUP_RETENTION_MAX_GB` (default `auto`): keep at most this many GiB in
+  total, removing the oldest first. `auto` is a fifth of the filesystem the
+  backups live on, and `0` turns the size limit off.
+
+The newest backup and the newest **full** backup are never removed. The
+newest full backup is the only local copy of Storage, and a run of
+database-only backups before updates must not push it out. So the count can
+be exceeded by one, and the size limit by those two backups.
+
+A backup also checks free space before it starts. It needs room for about the
+size of the databases (plus Storage for a full one), 10% on top, and 1 GiB to
+spare. Otherwise it fails with a message saying how much it needs. Before an
+application update that is a warning and the update continues, as with any
+other backup failure. Before a Supabase update the update is refused. Free
+space with `sentinel-ops cleanup`, or by lowering the limits above.
+
+restic deduplicates unchanged objects across its own snapshots, so the 3-2-1
+copies grow by what changed, not by the full size each time.
 
 ## Restoring
 
@@ -58,7 +95,8 @@ Every restore, regardless of source:
 
 1. Verifies the backup's checksums before touching anything live.
 2. Shows its metadata and asks for confirmation.
-3. Takes a fresh safety backup of the current state first.
+3. Takes a fresh safety backup of the current state first, of the same scope
+   as the restore.
 4. Restores the database.
 5. With `--scope=full`, also restores Storage and edge functions, then asks
    a **second, separate** confirmation before restoring `config.tar.gz` (it
@@ -171,3 +209,5 @@ Postgres versions or the backup layout.
 | `schedule enable` warns "systemctl not available" | No systemd on this host. Run `sentinel-ops schedule run-now` from your own cron instead. |
 | Rotating a leaked/expired backend credential | `sentinel-ops remote <role> configure` again — it overwrites `config/restic-<role>.env`. |
 | Backup verification fails | The backup is corrupt — do not restore it. Fall back to an older local backup, or a secondary/offsite snapshot: `sentinel-ops restore --from=secondary`. |
+| "Not enough free space for a ... backup" | `sudo sentinel-ops cleanup --dry-run` to see what retention would free, then `sudo sentinel-ops cleanup`. If that is not enough, lower `BACKUP_RETENTION_COUNT`/`BACKUP_RETENTION_MAX_GB` and run cleanup again, or see [OPERATIONS.md](OPERATIONS.md#disk-space). |
+| `backups/` is much bigger than expected | `sentinel-ops backup list` shows each backup's size and scope. Backups taken before database-only backups existed are all full; retention removes them as newer ones arrive, or straight away with `sentinel-ops cleanup`. |

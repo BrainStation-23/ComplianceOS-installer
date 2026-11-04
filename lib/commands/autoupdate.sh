@@ -141,6 +141,15 @@ _autoupdate_run_cycle() {
             ;;
     esac
 
+    # An update writes a backup and a new image. On a nearly full disk that is
+    # what fills it, so wait - checked again every cycle, nothing is held.
+    local short
+    if ! short="$(disk_room_for_update)"; then
+        log_error "Not updating to ${remote:0:7}: only ${short} (AUTO_UPDATE_MIN_FREE_GB=${AUTO_UPDATE_MIN_FREE_GB}). Free space with: sentinel-ops cleanup"
+        _autoupdate_record "skipped: low disk space (${short})"
+        return 1
+    fi
+
     # An operator's update (or a long one from the previous check) is already
     # doing the work - this is not a failure, just not our turn.
     if ! update_lock_acquire; then
