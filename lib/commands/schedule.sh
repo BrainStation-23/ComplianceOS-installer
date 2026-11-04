@@ -159,7 +159,7 @@ _schedule_run_cycle() {
     printf '\n'
 
     local dir
-    if ! dir="$(backup_create_full "scheduled")"; then
+    if ! dir="$(backup_create "scheduled")"; then
         log_error "Scheduled backup failed - no local backup was produced this cycle."
         return 1
     fi

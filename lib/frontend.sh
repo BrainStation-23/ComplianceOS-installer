@@ -323,7 +323,10 @@ frontend_run_container() {
     if [[ "$attached" == "true" ]]; then
         args+=(--network "$network")
     fi
-    args+=("$image")
+    # Without a limit, the container's log grows until the disk is full.
+    local log_args=()
+    mapfile -t log_args < <(container_log_run_args)
+    args+=("${log_args[@]}" "$image")
 
     local rc=0 mdm_secret
     mdm_secret="$(frontend_mdm_proxy_secret)"

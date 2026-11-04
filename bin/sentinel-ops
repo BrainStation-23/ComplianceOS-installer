@@ -13,7 +13,7 @@
 #   sentinel-ops backup [create|list|verify]
 #   sentinel-ops restore [backup] [--scope=db|full] [--from=local|secondary|offsite]
 #   sentinel-ops rollback           previous application image
-#   sentinel-ops cleanup [--dry-run]   remove superseded Docker images
+#   sentinel-ops cleanup [--dry-run]   free disk space (backups, logs, images)
 #   sentinel-ops logs [target]
 #   sentinel-ops remote [status|secondary|offsite]   3-2-1 replication targets
 #   sentinel-ops schedule [status|enable|disable|run-now]
@@ -45,7 +45,7 @@ SO_ASSETS_DIR="${SO_ROOT}/assets"
 # alongside the installer.
 SO_SOURCE_DIR="$SO_ROOT"
 
-for _lib in common os prereqs config supabase logflare azure hardening storage firewall repo frontend mdm_proxy images database backup restic selfinstall repair menu; do
+for _lib in common os prereqs config supabase logflare azure hardening storage container_logs firewall repo frontend mdm_proxy images disk database backup restic selfinstall repair menu; do
     # shellcheck source=/dev/null
     source "${SO_LIB_DIR}/${_lib}.sh"
 done
@@ -97,9 +97,9 @@ Commands:
   restore [backup] [--scope=db|full] [--from=local|secondary|offsite]
                           Restore a backup (latest local if omitted)
   rollback                Roll the application back to the previous image
-  cleanup [--dry-run]     Remove superseded Docker images (old builds, old
-                          Supabase versions, stale build cache); keeps the
-                          deployed and rollback images
+  cleanup [--dry-run]     Free disk space: backups past retention, installer
+                          logs past LOG_RETENTION_DAYS, superseded Docker
+                          images and stale build cache
   logs [target] [lines]   app | supabase | logflare | installer
   remote [status|secondary|offsite [status|configure|check|forget]]
                           Configure the 3-2-1 replication targets - see

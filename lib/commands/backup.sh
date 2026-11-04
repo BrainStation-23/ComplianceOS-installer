@@ -16,26 +16,28 @@ cmd_backup() {
     case "${1:-create}" in
         create|"")
             shift || true
-            local label="manual"
+            local label="manual" scope="full"
             while (( $# )); do
                 case "$1" in
                     --label) label="${2:-manual}"; shift 2 ;;
                     --label=*) label="${1#--label=}"; shift ;;
+                    --scope=*) scope="${1#--scope=}"; shift ;;
                     *) log_warn "Ignoring unknown option: $1"; shift ;;
                 esac
             done
+            case "$scope" in full|db) ;; *) die "Invalid --scope: ${scope} (expected full or db)" ;; esac
             local dir
-            dir="$(backup_create_full "$label")" || die "Backup failed."
+            dir="$(backup_create "$label" "$scope")" || die "Backup failed."
             printf '\n'
             log_ok "Backup complete: ${dir}"
             ;;
         list|ls)
             section "Backups"
-            local d size reason found=0
-            while IFS='|' read -r d size reason; do
+            local d size reason scope found=0
+            while IFS='|' read -r d size reason scope; do
                 [[ -n "$d" ]] || continue
                 found=1
-                printf '%-24s %-10s %s\n' "$(basename "$d")" "$size" "$reason"
+                printf '%-24s %-10s %-5s %s\n' "$(basename "$d")" "$size" "$scope" "$reason"
             done < <(backup_list_entries)
             (( found )) || printf 'No backups yet.\n'
             printf '\n'
@@ -53,7 +55,7 @@ cmd_backup() {
             ;;
         *)
             log_error "Unknown backup subcommand: $1"
-            printf 'Valid: create [--label <text>], list, verify [backup-id]\n'
+            printf 'Valid: create [--label <text>] [--scope=full|db], list, verify [backup-id]\n'
             return 2
             ;;
     esac

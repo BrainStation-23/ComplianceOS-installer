@@ -25,6 +25,7 @@ _install_supabase_files() {
     fi
     hardening_apply_config || return 1
     storage_apply_config || return 1
+    container_logs_apply_config || log_warn "Container logs are not size-limited; re-run: sentinel-ops repair apply"
     return 0
 }
 
@@ -69,6 +70,19 @@ _install_storage_limit() {
     return 0
 }
 
+# Analytics adds services after the stack first started, and an installation
+# that predates the overlay has none, so it is re-applied on every run.
+# `up -d` recreates only the containers whose logging actually changed.
+_install_container_logs() {
+    local before
+    before="$(_container_logs_fingerprint)"
+    container_logs_apply_config || return 1
+    if [[ "$before" != "$(_container_logs_fingerprint)" ]] && supabase_check_postgres; then
+        supabase_restart || return 1
+    fi
+    return 0
+}
+
 _install_network() {
     firewall_ensure_active
     network_apply_firewall
@@ -97,7 +111,7 @@ _install_app_env() {
 _install_database() {
     # A backup before the very first migration run is cheap and gives a clean
     # restore point for the pre-application database.
-    backup_create_full "pre-install-migrations" >/dev/null || \
+    backup_create "pre-install-migrations" db >/dev/null || \
         log_warn "Could not create a pre-migration backup; continuing."
     deploy_migrations || return 1
     deploy_functions || return 1
@@ -240,6 +254,10 @@ cmd_install() {
     # not abort an otherwise good installation.
     phase_once logflare        "Analytics (Logflare)"        _install_logflare        || \
         log_warn "Analytics was not deployed; the rest of the stack is unaffected."
+
+    phase_begin "Container log limits"
+    _install_container_logs || log_warn "Container logs are not size-limited; re-run: sentinel-ops repair apply"
+    phase_end
     phase_once repository      "Sentinel Ops repository"     _install_repository      || die "Repository checkout failed."
 
     # The remaining phases are cheap and depend on current config, so they run

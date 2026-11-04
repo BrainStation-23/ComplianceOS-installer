@@ -7,6 +7,7 @@ set -uo pipefail
 
 ROOT="${1:-$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 source "${ROOT}/lib/common.sh"
+source "${ROOT}/lib/container_logs.sh"
 source "${ROOT}/lib/frontend.sh"
 
 pass=0; fail=0
@@ -96,6 +97,9 @@ frontend_run_container sentinel-ops-frontend sentinel-ops:abc1234 3000 >/dev/nul
 check "SITE_URL reaches the container (sentinel-ops#633)" "1" "$(grep -cx -- 'SITE_URL=https://app.example.com' "$RUN_ARGS")"
 check "SUPABASE_PUBLIC_URL still does"                     "1" "$(grep -cx -- 'SUPABASE_PUBLIC_URL=https://supabase.example.com' "$RUN_ARGS")"
 check "the service-role key is still passed by name only"  "0" "$(grep -c -- 'svc' "$RUN_ARGS")"
+check "the container's log has a size limit"              "1" "$(grep -cx -- 'max-size=50m' "$RUN_ARGS")"
+check "and a file count"                                   "1" "$(grep -cx -- 'max-file=3' "$RUN_ARGS")"
+check "the image is still the last argument" "sentinel-ops:abc1234" "$(tail -n1 "$RUN_ARGS")"
 SITE_URL="https://new.example.com"
 frontend_run_container sentinel-ops-frontend sentinel-ops:abc1234 3000 >/dev/null 2>&1
 check "a new SITE_URL (domain set) is what the next start gets" "1" "$(grep -cx -- 'SITE_URL=https://new.example.com' "$RUN_ARGS")"

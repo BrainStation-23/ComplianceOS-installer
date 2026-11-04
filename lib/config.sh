@@ -88,8 +88,18 @@ STORAGE_FILE_SIZE_LIMIT="4294967296"
 # cache age is a docker duration such as 168h.
 IMAGE_CLEANUP_ENABLED="true"
 IMAGE_BUILD_CACHE_MAX_AGE="168h"
-# How many local backup cycles to keep (lib/backup.sh:backup_prune_local).
+# Local backup retention (lib/backup.sh:_backup_prune_candidates): at most
+# this many, and at most this many GiB in total - "auto" is a fifth of the
+# filesystem, 0 is no size limit.
 BACKUP_RETENTION_COUNT="10"
+BACKUP_RETENTION_MAX_GB="auto"
+# Installer run logs older than this many days are removed (lib/disk.sh); 0
+# keeps them all.
+LOG_RETENTION_DAYS="30"
+# Size limit on every container's log (lib/container_logs.sh): this many files
+# of at most this size, per container.
+CONTAINER_LOG_MAX_SIZE="50m"
+CONTAINER_LOG_MAX_FILES="3"
 # Scheduled backups (lib/commands/schedule.sh). Off by default; see
 # `sentinel-ops schedule enable`. CHECK_DAY names the day restic's own
 # integrity check runs against configured remotes, not every night's backup.
@@ -115,6 +125,9 @@ RESTIC_OFFSITE_KEEP_MONTHLY="6"
 # remote branch is *checked* - an update only runs when it has moved.
 AUTO_UPDATE_ENABLED="false"
 AUTO_UPDATE_CALENDAR="hourly"
+# An auto-update is skipped while less than this many GiB are free where it
+# would write (lib/disk.sh); 0 turns the check off.
+AUTO_UPDATE_MIN_FREE_GB="5"
 # Branch of the installer repository `sentinel-ops self-update` pulls from
 # (lib/selfupdate.sh). SENTINEL_OPS_INSTALLER_BRANCH overrides it per run.
 INSTALLER_BRANCH="main"
@@ -164,13 +177,15 @@ config_load() {
                MDM_PROXY_CERT_SOURCE MDM_PROXY_DOMAIN MDM_PROXY_ACME_EMAIL \
                MDM_PROXY_CERTBOT_IMAGE \
                STORAGE_FILE_SIZE_LIMIT IMAGE_CLEANUP_ENABLED IMAGE_BUILD_CACHE_MAX_AGE \
-               BACKUP_RETENTION_COUNT \
+               BACKUP_RETENTION_COUNT BACKUP_RETENTION_MAX_GB LOG_RETENTION_DAYS \
+               CONTAINER_LOG_MAX_SIZE CONTAINER_LOG_MAX_FILES \
                BACKUP_SCHEDULE_ENABLED BACKUP_SCHEDULE_CALENDAR BACKUP_SCHEDULE_CHECK_DAY \
                RESTIC_SECONDARY_ENABLED RESTIC_SECONDARY_REPOSITORY \
                RESTIC_SECONDARY_KEEP_DAILY RESTIC_SECONDARY_KEEP_WEEKLY RESTIC_SECONDARY_KEEP_MONTHLY \
                RESTIC_OFFSITE_ENABLED RESTIC_OFFSITE_REPOSITORY \
                RESTIC_OFFSITE_KEEP_DAILY RESTIC_OFFSITE_KEEP_WEEKLY RESTIC_OFFSITE_KEEP_MONTHLY \
-               AUTO_UPDATE_ENABLED AUTO_UPDATE_CALENDAR INSTALLER_BRANCH; do
+               AUTO_UPDATE_ENABLED AUTO_UPDATE_CALENDAR AUTO_UPDATE_MIN_FREE_GB \
+               INSTALLER_BRANCH; do
         val="$(env_get "$CONFIG_FILE" "$key" || true)"
         [[ -n "$val" ]] && printf -v "$key" '%s' "$val"
     done
@@ -247,8 +262,13 @@ config_save() {
         printf '# Docker image cleanup after updates - see docs/OPERATIONS.md\n'
         printf 'IMAGE_CLEANUP_ENABLED=%s\n'     "$IMAGE_CLEANUP_ENABLED"
         printf 'IMAGE_BUILD_CACHE_MAX_AGE=%s\n\n' "$IMAGE_BUILD_CACHE_MAX_AGE"
+        printf '# Disk space - see docs/OPERATIONS.md\n'
+        printf 'LOG_RETENTION_DAYS=%s\n'         "$LOG_RETENTION_DAYS"
+        printf 'CONTAINER_LOG_MAX_SIZE=%s\n'     "$CONTAINER_LOG_MAX_SIZE"
+        printf 'CONTAINER_LOG_MAX_FILES=%s\n\n'  "$CONTAINER_LOG_MAX_FILES"
         printf '# Backups - see docs/BACKUPS.md\n'
         printf 'BACKUP_RETENTION_COUNT=%s\n' "$BACKUP_RETENTION_COUNT"
+        printf 'BACKUP_RETENTION_MAX_GB=%s\n' "$BACKUP_RETENTION_MAX_GB"
         printf 'BACKUP_SCHEDULE_ENABLED=%s\n'  "$BACKUP_SCHEDULE_ENABLED"
         printf 'BACKUP_SCHEDULE_CALENDAR=%s\n' "$BACKUP_SCHEDULE_CALENDAR"
         printf 'BACKUP_SCHEDULE_CHECK_DAY=%s\n\n' "$BACKUP_SCHEDULE_CHECK_DAY"
@@ -268,6 +288,7 @@ config_save() {
         printf '# Updates - see docs/OPERATIONS.md\n'
         printf 'AUTO_UPDATE_ENABLED=%s\n'   "$AUTO_UPDATE_ENABLED"
         printf 'AUTO_UPDATE_CALENDAR=%s\n'  "$AUTO_UPDATE_CALENDAR"
+        printf 'AUTO_UPDATE_MIN_FREE_GB=%s\n' "$AUTO_UPDATE_MIN_FREE_GB"
         printf 'INSTALLER_BRANCH=%s\n'      "$INSTALLER_BRANCH"
     } >"$tmp"
     cat "$tmp" >"$CONFIG_FILE"

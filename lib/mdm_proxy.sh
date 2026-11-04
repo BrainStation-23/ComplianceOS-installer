@@ -191,6 +191,8 @@ mdm_proxy_start() {
     chmod 644 "${dir}/Caddyfile"
 
     docker rm -f "$MDM_PROXY_CONTAINER" >/dev/null 2>&1 || true
+    local log_args=()
+    mapfile -t log_args < <(container_log_run_args)
     local args=(
         run -d
         --name "$MDM_PROXY_CONTAINER"
@@ -201,6 +203,7 @@ mdm_proxy_start() {
         -v "${dir}/Caddyfile:/etc/caddy/Caddyfile:ro"
         -v "${dir}/tls:/tls:ro"
         -p "${MDM_PROXY_BIND}:${MDM_PROXY_PORT}:8443"
+        "${log_args[@]}"
         "$MDM_PROXY_IMAGE"
     )
     local rc=0 secret
