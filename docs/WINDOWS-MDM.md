@@ -34,6 +34,116 @@ request client certificates, must not on the MDM hostname, or PCs can't
 enroll (sentinel-ops#638). Check-ins always need a port of their own; see
 [REVERSE-PROXY.md](REVERSE-PROXY.md#windows-mdm-hostname-client-certificates).
 
+## Quick setup: three steps
+
+For when DNS and the network are already in place (the hostname points at the
+server's public address, and the MDM port reaches it). If not, start with the
+[message for IT](#message-for-it). Use your own hostname instead of
+`mdm.example.com` everywhere below.
+
+**Do all three.** Each one on its own looks finished, and missing any one of
+them breaks enrollment or check-ins (see [Common mistakes](#common-mistakes)).
+
+1. **The console: Settings → MDM.** Create the **Windows device CA**, set the
+   **MDM hostname** (`mdm.example.com`) and the **MDM port** (`9443`), and
+   save. The card shows the two addresses PCs will use: discovery on 443,
+   check-ins on the MDM port. If the MDM port field is missing, update the
+   application first (`sudo sentinel-ops update app`).
+2. **The installer: the MDM proxy and its certificate.** On the Sentinel Ops
+   server, with the **same port** as in step 1:
+
+   ```bash
+   sudo sentinel-ops mdm-proxy enable --port 9443 --cloudflare --domain mdm.example.com
+   sudo sentinel-ops mdm-proxy status    # every line green
+   ```
+
+   This gets a Let's Encrypt certificate through Cloudflare DNS (it asks for
+   the API token) and serves check-ins on 9443. Not on Cloudflare? Use
+   Zoraxy's certificate files instead; see
+   [Certificate for port 9443](#certificate-for-port-9443).
+3. **Zoraxy: a rule for the MDM hostname on 443.** In Zoraxy, add an **HTTP
+   proxy rule** for `mdm.example.com` pointing at the Sentinel Ops frontend
+   (`127.0.0.1:41820`, the same target as the app's own rule), and issue a
+   certificate for it under **TLS / SSL certificates** (ACME). Discovery,
+   the sign-in page and enrollment all arrive here. The certificate from
+   step 2 does **not** cover this: it is only used on the MDM port.
+
+Then [check it from outside](#check-it-from-outside) and enroll one test PC
+before rolling out.
+
+### Check it from outside
+
+From a machine that is **not** on the server's network (a laptop on a phone
+hotspot is fine; Git Bash on Windows has `openssl`):
+
+```bash
+H=mdm.example.com
+# 443 (Zoraxy, step 3): expect your hostname, issued by Let's Encrypt, "Verify return code: 0 (ok)"
+echo | openssl s_client -connect $H:443  -servername $H 2>&1 | grep -E "^ *0 s:|i:|Verify return"
+# MDM port (the installer, step 2): the same
+echo | openssl s_client -connect $H:9443 -servername $H 2>&1 | grep -E "^ *0 s:|i:|Verify return"
+# discovery answers through Zoraxy: expect 200, not a redirect
+curl -s -o /dev/null -w "%{http_code}\n" https://$H/EnrollmentServer/Discovery.svc
+# check-ins answer through the MDM proxy: expect 401 (a check-in with no certificate)
+curl -s -X POST -o /dev/null -w "%{http_code}\n" https://$H:9443/ManagementServer/MDM.svc
+```
+
+What a wrong answer means:
+
+| You get | It means |
+|---|---|
+| `CN=Zoraxy Self-host`, `O=imuslab.com`, "self-signed certificate" on 443 | Zoraxy has no rule or certificate for this hostname (step 3 missing) |
+| A 3xx redirect from `Discovery.svc` | Same: Zoraxy is sending the hostname to its default site |
+| A certificate for a **different** hostname on either port | That port belongs to another installation (e.g. staging); see [Common mistakes](#common-mistakes) |
+| No connection on the MDM port | The proxy isn't running (step 2), or the port isn't forwarded or allowed in a firewall |
+| `503` from `MDM.svc` | The application has no proxy secret yet: `sudo sentinel-ops update app` |
+
+## Common mistakes
+
+- **No Zoraxy rule for the MDM hostname.** The easiest one to miss: the app's
+  hostname works, the MDM proxy is green, and the console is set up, but
+  nothing on 443 knows `mdm.example.com`. Zoraxy then answers with its
+  built-in self-signed certificate (`CN=Zoraxy Self-host`) and Windows shows
+  **"Website certificate problem: Your organization's website is using an
+  untrusted or expired certificate"**. Add the rule and its ACME certificate
+  (step 3).
+- **Thinking the installer's certificate covers 443.** `mdm-proxy enable
+  --cloudflare` gets a certificate for the MDM proxy's port only. Zoraxy needs
+  its own for the same hostname on 443. Two certificates for one name is
+  normal.
+- **Different ports in the console and the installer.** The console's MDM
+  port is the address PCs are told to check in on; `--port` is where the
+  proxy listens. If they differ (or one has a typo, `9433` against `9443`),
+  PCs enroll and then never check in. `mdm-proxy status` prints the port the
+  console must show.
+- **Two installations behind one public address** (e.g. staging and
+  production). Port 443 can be shared: Zoraxy routes by hostname. The MDM port
+  **can't**: the MDM proxy ends TLS itself, so each installation needs its own
+  port (e.g. staging `9443`, production `9444`), its own port forward to its
+  own server, and that port in its own console. If production PCs get
+  staging's certificate on the MDM port, the forward points at the wrong
+  server.
+- **Port open on the server but not on the way in.** The installer opens the
+  server's own firewall (ufw/firewalld). The router's port forward, the cloud
+  security group, or a Zoraxy Stream Proxy (when Zoraxy holds the public
+  address) is still needed for the MDM port.
+- **The MDM hostname proxied through Cloudflare** (orange cloud). Cloudflare
+  then ends TLS, the PC's certificate never reaches the MDM proxy, and the MDM
+  port isn't reachable at all through Cloudflare. Set the record to **DNS
+  only** (grey cloud). Only the app's hostname may be proxied.
+- **Setting the MDM port after PCs enrolled.** A PC keeps the check-in address
+  it enrolled with. PCs enrolled before the port was set (or changed) must
+  enroll again.
+- **Testing from inside the server's network.** Many routers don't loop
+  traffic for their own public address back in (no hairpin NAT), so tests
+  from the office can fail or hit a different path than PCs outside. Test
+  from a phone hotspot.
+- **Reading "We couldn't auto-discover a management endpoint" as the
+  error.** Windows shows it whenever the e-mail's domain has no
+  `EnterpriseEnrollment` DNS record pointing here, which is normal. Enter the
+  discovery address (`https://mdm.example.com/EnrollmentServer/Discovery.svc`)
+  in the field it shows; the real error, if any, comes after that.
+
 ## What has to be in place
 
 | What | Who | Notes |
@@ -193,6 +303,10 @@ with, so PCs enrolled earlier keep trying 443 until they enroll again.
 
 | What you see | Likely cause | What to do |
 |---|---|---|
+| Windows: "We couldn't auto-discover a management endpoint" | The e-mail domain has no `EnterpriseEnrollment` record pointing here; normal | Enter `https://mdm.example.com/EnrollmentServer/Discovery.svc` as the server |
+| Windows: "Website certificate problem" while enrolling | Port 443 serves an untrusted certificate for the MDM hostname, usually Zoraxy's self-signed default because it has no rule for the hostname | [Quick setup](#quick-setup-three-steps), step 3; then [check it from outside](#check-it-from-outside) |
+| Windows: `0x80192F0C` while enrolling | Something on 443 asks for a client certificate on the MDM hostname | Turn that off on 443; client certificates belong on the MDM port only |
+| The MDM port serves another installation's certificate | Two installations share a public address and the forward points at the other one | Give each its own port; see [Common mistakes](#common-mistakes) |
 | PCs enroll, but the console says none has checked in | The MDM port isn't set in the console, or 9443 doesn't reach the server | Check **Settings → MDM** shows the check-in address with `:9443`; do step 5 above |
 | `mdm-proxy status`: "Reaches the app: 503" | The application has no proxy secret yet | `sudo sentinel-ops update app` |
 | `mdm-proxy status`: the certificate expires soon | Zoraxy's files aren't being renewed, or the copy from another machine stopped; with Cloudflare, renewal is failing | Renew in Zoraxy (or fix the copy), then `sudo sentinel-ops mdm-proxy sync-cert`. With Cloudflare, run `sync-cert` and read `sentinel-ops logs installer` |
