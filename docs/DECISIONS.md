@@ -883,3 +883,75 @@ Docker is down, which on a full disk it may well be.
 Not done: Logflare's analytics tables live in Postgres and grow with it,
 making every `database.sql` bigger too. That needs a retention setting inside
 Logflare, which is worth adding only if the dump turns out to be large.
+
+---
+
+## 35. The database dump leaves log and telemetry data out, by a denylist, and is compressed
+
+Every backup was one `pg_dumpall` of the whole cluster, written as plain
+text. That took everything:
+
+- the `_supabase` database's `_analytics` schema, which is Logflare's whole
+  log store (6, and the "Not done" in 34);
+- Supabase housekeeping that grows without bound: `auth.audit_log_entries`,
+  `net._http_response`, `cron.job_run_details`, the `pgmq.a_*` archives and
+  the `realtime.messages` partitions;
+- the application's rolling and derived telemetry.
+
+None of that is needed to bring an install back, and it was uncompressed SQL
+copied into every backup and every restic snapshot.
+
+**What changed.** `pg_dumpall` cannot leave table data out, so the dump is
+now built from parts:
+
+1. `pg_dumpall --globals-only` for the roles.
+2. For each database that takes connections, a `\connect` and then
+   `pg_dump --exclude-table-data=...`.
+3. The whole stream goes through `gzip --rsyncable` into `database.sql.gz`.
+   `--rsyncable` keeps unchanged stretches byte-identical after compression,
+   so restic still deduplicates.
+
+The excluded tables keep their definitions, so a restore recreates them
+empty and Logflare, Studio and the application start as usual. `--create` is
+left out because Supabase creates its own databases, and dropping
+`_supabase` while Logflare holds connections to it would fail the restore.
+`metadata.txt` records what was left out, and a restore says so. Restore
+reads both `database.sql.gz` and the old `database.sql`.
+
+The list is `BACKUP_EXCLUDE_DATA_DEFAULT` in `lib/backup.sh`. Operators add to
+it with `BACKUP_EXCLUDE_DATA`, or set `BACKUP_INCLUDE_LOG_DATA=true` to dump
+everything again. `sentinel-ops backup size` shows the largest tables of each
+database and which ones a backup takes, so the list can be tuned from
+numbers rather than guesses. The free-space estimate (34) subtracts the
+excluded tables.
+
+**Why a denylist and not the application's `backup_table_registry`.** The
+application has a table that lists which `public` tables to back up. It is
+the allowlist of the *in-app* export: JSONL files written to the `backups`
+bucket. Many of its exclusions are there for security, not because the data
+is disposable:
+
+- `mdm_certificate_authorities`, `apple_mdm_push_certificates`,
+  `agent_disk_recovery_keys`, `agent_passwords`, `integration_secrets`;
+- and, since it only names `public`, all of `auth`, `vault` (BitLocker and
+  FileVault keys, the MDM CA keys, the backup keys), `storage.objects` and
+  the schema itself.
+
+This backup is the disaster-recovery copy. If it followed the registry, a
+restored install would have no users, no MDM CA (so every enrolled device
+would have to enroll again) and no escrowed recovery keys. The registry is
+still where the application-side part of the denylist comes from: the rows
+it marks derived, rolling or transient. Those are listed by name here,
+because the registry says so only in its free-text `reason` column. If that
+list starts to drift, the fix is a structured `regenerable` column in the
+registry, read here.
+
+Audit trails stay in (`audit_logs`, `user_activity_logs`,
+`command_audit_logs`, the `*_change_audit` tables). They look like logs, but
+for a compliance product they are evidence.
+
+**The in-app backups' bucket leaves `storage.tar.gz`.** Those backups are
+already copies, sent to their own destinations. Archiving them again inside
+every full installer backup only doubled their size. Their `storage.objects`
+and `public.backups` rows are still in the dump. After a full restore, the
+files are wherever their destinations kept them, and the restore says so.

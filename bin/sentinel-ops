@@ -10,7 +10,7 @@
 #   sentinel-ops branch [status|set <name>]   which app branch is deployed
 #   sentinel-ops status             what is actually running
 #   sentinel-ops credentials        generated Supabase credentials
-#   sentinel-ops backup [create|list|verify]
+#   sentinel-ops backup [create|list|verify|size]
 #   sentinel-ops restore [backup] [--scope=db|full] [--from=local|secondary|offsite]
 #   sentinel-ops rollback           previous application image
 #   sentinel-ops cleanup [--dry-run]   free disk space (backups, logs, images)
@@ -91,9 +91,10 @@ Commands:
                           `update` and auto-update both follow it
   status                  Show what is currently deployed and healthy
   credentials             Show the generated Supabase credentials
-  backup [create|list|verify]
+  backup [create|list|verify|size]
                           Create, list or verify a full-stack backup
-                          (database, Storage, functions, config)
+                          (database, Storage, functions, config); size
+                          shows the largest tables and which ones it takes
   restore [backup] [--scope=db|full] [--from=local|secondary|offsite]
                           Restore a backup (latest local if omitted)
   rollback                Roll the application back to the previous image

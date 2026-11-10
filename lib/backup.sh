@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# lib/backup.sh - full-stack backups: Postgres, Storage, edge functions and
-# enough config to rebuild the install, plus local retention and the shared
-# restore implementation.
+# lib/backup.sh - full-stack backups: Postgres (less its log data), Storage,
+# edge functions and enough config to rebuild the install, plus local
+# retention and the shared restore implementation.
 #
 # Each backup is a single directory per cycle (see backup_create()) so
 # that restic (lib/restic.sh) can back up exactly that directory for the
@@ -21,6 +21,53 @@ BACKUP_ARCHIVE_FILES=(storage.tar.gz functions.tar.gz config.tar.gz)
 # Free space a backup must leave behind, on top of its own estimated size:
 # filling the disk to the last byte takes the database down with it.
 BACKUP_FREE_SPACE_RESERVE_BYTES=1073741824
+
+# The database dump. Backups from before the dump was compressed and filtered
+# hold database.sql instead; restore reads either (_backup_db_file).
+BACKUP_DB_FILE="database.sql.gz"
+BACKUP_DB_FILE_LEGACY="database.sql"
+
+# Tables whose *data* a backup leaves out, as "<database>:<schema>.<table>"
+# with pg_dump-style * wildcards. Their definitions are still dumped, so a
+# restore recreates them empty. Everything here is logs, telemetry or state
+# the application rebuilds on its own - never business data, users, secrets
+# or audit trails (audit_logs, user_activity_logs, *_audit stay in: for a
+# compliance product they are evidence). See docs/DECISIONS.md #35.
+#
+# This is deliberately not the application's backup_table_registry: that is
+# the allowlist of the in-app JSONL export, which leaves out auth, vault, MDM
+# CAs and recovery keys for security reasons - exactly what a disaster
+# recovery copy must have.
+BACKUP_EXCLUDE_DATA_DEFAULT=(
+    # Logflare's log store (docs/LOGFLARE.md): every container's log lines.
+    '_supabase:_analytics.*'
+    # Supabase housekeeping that grows without bound.
+    'postgres:auth.audit_log_entries'
+    'postgres:net._http_response'
+    'postgres:cron.job_run_details'
+    'postgres:pgmq.a_*'
+    'postgres:realtime.messages*'
+    # Application tables its own backup registry marks derived, rolling or
+    # transient (sentinel-ops supabase/migrations, backup_table_registry).
+    'postgres:public.agent_power_windows'
+    'postgres:public.agent_awake_hours'
+    'postgres:public.dlp_file_health_samples'
+    'postgres:public.dlp_event_merges'
+    'postgres:public.yara_event_receipts'
+    'postgres:public.yara_agent_event_counters'
+    'postgres:public.compliance_check_results'
+    'postgres:public.compliance_agent_results'
+    'postgres:public.compliance_org_check_results'
+    'postgres:public.compliance_eval_pending'
+    'postgres:public.storage_sweep_runs'
+    'postgres:public.software_catalog_enrich_runs'
+    'postgres:public.integration_sync_runs'
+)
+
+# The in-app backups' bucket. Those backups are already copies (to their own
+# destinations); archiving them again inside every full installer backup only
+# doubles their size. A path in the Storage volume: <tenant>/<ns>/<bucket>.
+BACKUP_STORAGE_EXCLUDE_BUCKETS=(backups)
 
 # backup_create <label> [full|db]
 #
@@ -52,10 +99,7 @@ backup_create() {
     mkdir -p "$dir"
 
     log_info "Backing up the database to ${dir}..." >&2
-    # pg_dumpall captures roles and every database, which is what a restore of
-    # a Supabase stack actually needs.
-    if ! docker exec -e PGPASSWORD="$(_db_pass)" "$cid" \
-            pg_dumpall -U "$(_db_user)" --clean --if-exists >"${dir}/database.sql" 2>>"${SO_LOG_FILE:-/dev/null}"; then
+    if ! ( set -o pipefail; _backup_dump_stream "$cid" | _backup_gzip >"${dir}/${BACKUP_DB_FILE}" ); then
         log_error "Database dump failed." >&2
         rm -rf "$dir"
         return 1
@@ -66,7 +110,9 @@ backup_create() {
     # exactly the backup someone reaches for).
     if [[ "$scope" == "full" && -d "${SUPABASE_DIR}/volumes/storage" ]]; then
         log_info "Archiving Storage..." >&2
-        _backup_archive "$dir" storage.tar.gz -C "${SUPABASE_DIR}/volumes" storage || return 1
+        local storage_args=()
+        mapfile -t storage_args < <(_backup_storage_exclude_args)
+        _backup_archive "$dir" storage.tar.gz "${storage_args[@]}" -C "${SUPABASE_DIR}/volumes" storage || return 1
     fi
     if [[ -d "${SUPABASE_DIR}/volumes/functions" ]]; then
         log_info "Archiving edge functions..." >&2
@@ -110,20 +156,202 @@ _backup_archive() {
 }
 
 # ---------------------------------------------------------------------------
+# The database dump - roles, then each database with log data left out
+# ---------------------------------------------------------------------------
+
+# Every "<database>:<pattern>" whose data a backup leaves out, one per line:
+# the built-in list plus BACKUP_EXCLUDE_DATA, or nothing at all when
+# BACKUP_INCLUDE_LOG_DATA is true.
+backup_exclude_data_entries() {
+    [[ "${BACKUP_INCLUDE_LOG_DATA:-false}" == "true" ]] && return 0
+    local entry extra=()
+    read -r -a extra <<<"${BACKUP_EXCLUDE_DATA:-}"
+    for entry in "${BACKUP_EXCLUDE_DATA_DEFAULT[@]}" "${extra[@]}"; do
+        [[ -n "$entry" ]] || continue
+        if [[ "$entry" != ?*:?*.?* ]]; then
+            log_warn "Ignoring BACKUP_EXCLUDE_DATA entry '${entry}': expected <database>:<schema>.<table>." >&2
+            continue
+        fi
+        printf '%s\n' "$entry"
+    done
+}
+
+# The patterns for one database, one per line.
+# _backup_exclude_patterns <database>
+_backup_exclude_patterns() {
+    local db="$1" entry
+    while IFS= read -r entry; do
+        [[ "${entry%%:*}" == "$db" ]] && printf '%s\n' "${entry#*:}"
+    done < <(backup_exclude_data_entries)
+    return 0
+}
+
+# pg_dump flags for one database, one per line.
+_backup_exclude_args() {
+    local pat
+    while IFS= read -r pat; do
+        [[ -n "$pat" ]] && printf -- '--exclude-table-data=%s\n' "$pat"
+    done < <(_backup_exclude_patterns "$1")
+    return 0
+}
+
+# Whether <schema.table> in <database> is on the exclusion list. pg_dump's *
+# and bash's glob * agree for these patterns, so this predicts what pg_dump
+# leaves out without asking it.
+# _backup_table_excluded <database> <schema.table>
+_backup_table_excluded() {
+    local pats=()
+    mapfile -t pats < <(_backup_exclude_patterns "$1")
+    _backup_matches_any "$2" "${pats[@]}"
+}
+
+# _backup_matches_any <schema.table> <pattern>...
+_backup_matches_any() {
+    local table="$1" pat
+    shift
+    for pat in "$@"; do
+        # shellcheck disable=SC2053 # the pattern is meant to glob
+        [[ -n "$pat" && "$table" == $pat ]] && return 0
+    done
+    return 1
+}
+
+# The databases a dump covers: every one that takes connections.
+_backup_databases() {
+    docker exec -e PGPASSWORD="$(_db_pass)" "$1" \
+        psql -U "$(_db_user)" -d "$(_db_name)" -tAc \
+        'SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate ORDER BY datname' \
+        2>>"${SO_LOG_FILE:-/dev/null}" | tr -d '\r'
+}
+
+# _backup_dump_stream <db-container>
+#
+# Write one plain SQL script to stdout that psql replays into a running
+# stack: roles first (pg_dumpall --globals-only), then each database's
+# pg_dump after a \connect to it. This is what pg_dumpall produced before,
+# except that pg_dumpall cannot leave table data out - and the log tables
+# were most of every backup.
+#
+# No --create: Supabase creates its databases itself, and dropping
+# _supabase while Logflare is connected to it would fail the restore.
+_backup_dump_stream() {
+    local cid="$1" db dbs=() args=()
+    mapfile -t dbs < <(_backup_databases "$cid")
+    if (( ${#dbs[@]} == 0 )); then
+        log_error "Could not list the databases to back up." >&2
+        return 1
+    fi
+    docker exec -e PGPASSWORD="$(_db_pass)" "$cid" \
+        pg_dumpall -U "$(_db_user)" --globals-only --clean --if-exists \
+        2>>"${SO_LOG_FILE:-/dev/null}" || return 1
+    for db in "${dbs[@]}"; do
+        [[ -n "$db" ]] || continue
+        mapfile -t args < <(_backup_exclude_args "$db")
+        printf '\n\\connect "%s"\n\n' "$db"
+        docker exec -e PGPASSWORD="$(_db_pass)" "$cid" \
+            pg_dump -U "$(_db_user)" -d "$db" --clean --if-exists "${args[@]}" \
+            2>>"${SO_LOG_FILE:-/dev/null}" || return 1
+    done
+}
+
+# gzip from stdin to stdout. --rsyncable keeps unchanged stretches of the
+# dump byte-identical after compression, so restic still deduplicates
+# across snapshots; older gzips without it fall back to plain gzip.
+_backup_gzip() {
+    if gzip --rsyncable -c </dev/null >/dev/null 2>&1; then
+        gzip --rsyncable -c
+    else
+        gzip -c
+    fi
+}
+
+# The dump file in a backup directory, either format; nothing if none.
+_backup_db_file() {
+    local dir="$1" f
+    for f in "$BACKUP_DB_FILE" "$BACKUP_DB_FILE_LEGACY"; do
+        [[ -f "${dir}/${f}" ]] && { printf '%s' "${dir}/${f}"; return 0; }
+    done
+    return 1
+}
+
+# Feed a backup's dump to stdout, uncompressed.
+_backup_db_cat() {
+    case "$1" in
+        *.gz) gzip -dc "$1" ;;
+        *)    cat "$1" ;;
+    esac
+}
+
+# tar options leaving BACKUP_STORAGE_EXCLUDE_BUCKETS out of storage.tar.gz,
+# one per line. Anchored and without * crossing a /, so only the bucket
+# directory itself matches - not an object that happens to be called
+# "backups" somewhere inside another bucket.
+_backup_storage_exclude_args() {
+    local bucket
+    (( ${#BACKUP_STORAGE_EXCLUDE_BUCKETS[@]} )) || return 0
+    printf '%s\n' --anchored --no-wildcards-match-slash
+    for bucket in "${BACKUP_STORAGE_EXCLUDE_BUCKETS[@]}"; do
+        printf -- '--exclude=storage/*/*/%s\n' "$bucket"
+    done
+}
+
+# Bytes in the Storage volume a full backup leaves out.
+_backup_storage_excluded_bytes() {
+    local root="${SUPABASE_DIR}/volumes/storage" bucket d total=0
+    for bucket in "${BACKUP_STORAGE_EXCLUDE_BUCKETS[@]}"; do
+        for d in "$root"/*/*/"$bucket"; do
+            [[ -d "$d" ]] && total=$(( total + $(disk_used_bytes "$d") ))
+        done
+    done
+    printf '%s' "$total"
+}
+
+# "<schema.table>|<bytes>" for every table in a database, largest first.
+# _backup_table_sizes <db-container> <database>
+_backup_table_sizes() {
+    docker exec -e PGPASSWORD="$(_db_pass)" "$1" \
+        psql -U "$(_db_user)" -d "$2" -tAF'|' -c \
+        "SELECT n.nspname || '.' || c.relname, pg_total_relation_size(c.oid)
+           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE c.relkind IN ('r', 'm')
+          ORDER BY 2 DESC" 2>>"${SO_LOG_FILE:-/dev/null}" | tr -d '\r'
+}
+
+# Bytes of table data in one database that the dump leaves out.
+_backup_excluded_db_bytes() {
+    local cid="$1" db="$2" name bytes total=0 pats=()
+    mapfile -t pats < <(_backup_exclude_patterns "$db")
+    (( ${#pats[@]} )) || { printf '0'; return 0; }
+    while IFS='|' read -r name bytes; do
+        [[ "$bytes" =~ ^[0-9]+$ ]] || continue
+        _backup_matches_any "$name" "${pats[@]}" && total=$(( total + bytes ))
+    done < <(_backup_table_sizes "$cid" "$db")
+    printf '%s' "$total"
+}
+
+# ---------------------------------------------------------------------------
 # Free space - refuse a backup that would fill the disk
 # ---------------------------------------------------------------------------
 
-# Rough size of a new backup: the databases as Postgres stores them (a plain
-# dump is usually smaller, never much larger) plus Storage when included.
+# Rough size of a new backup: the databases as Postgres stores them, less the
+# table data the dump leaves out, plus Storage (less its excluded buckets)
+# when included. A compressed dump comes out well under this, so the
+# free-space check it feeds stays on the safe side.
 # _backup_estimate_bytes <full|db> <db-container>
 _backup_estimate_bytes() {
-    local scope="$1" cid="$2" db
+    local scope="$1" cid="$2" db excluded=0 d
     db="$(docker exec -e PGPASSWORD="$(_db_pass)" "$cid" \
         psql -U "$(_db_user)" -d "$(_db_name)" -tAc \
         'SELECT sum(pg_database_size(datname))::bigint FROM pg_database' 2>/dev/null | tr -d '[:space:]')" || true
     [[ "$db" =~ ^[0-9]+$ ]] || db=0
+    while IFS= read -r d; do
+        [[ -n "$d" ]] && excluded=$(( excluded + $(_backup_excluded_db_bytes "$cid" "$d") ))
+    done < <(backup_exclude_data_entries | cut -d: -f1 | LC_ALL=C sort -u)
+    db=$(( db > excluded ? db - excluded : 0 ))
     if [[ "$scope" == "full" && -d "${SUPABASE_DIR}/volumes/storage" ]]; then
-        db=$(( db + $(disk_used_bytes "${SUPABASE_DIR}/volumes/storage") ))
+        local storage
+        storage=$(( $(disk_used_bytes "${SUPABASE_DIR}/volumes/storage") - $(_backup_storage_excluded_bytes) ))
+        (( storage > 0 )) && db=$(( db + storage ))
     fi
     printf '%s' "$db"
 }
@@ -162,7 +390,12 @@ _backup_metadata_write() {
         printf 'app_commit=%s\n'        "$(state_get APP_COMMIT unknown)"
         printf 'app_branch=%s\n'        "$APP_BRANCH"
         printf 'app_image=%s\n'         "$(state_get APP_IMAGE unknown)"
-        printf 'size_bytes=%s\n'        "$(stat -c%s "${dir}/database.sql" 2>/dev/null || printf '0')"
+        printf 'size_bytes=%s\n'        "$(stat -c%s "$(_backup_db_file "$dir")" 2>/dev/null || printf '0')"
+        # What the dump left out, so a restore can say which tables come back
+        # empty. Absent on backups from before exclusions existed.
+        printf 'excluded_data=%s\n'     "$(backup_exclude_data_entries 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+        [[ "$scope" == "full" ]] && \
+            printf 'excluded_storage_buckets=%s\n' "${BACKUP_STORAGE_EXCLUDE_BUCKETS[*]}"
     } >"${dir}/metadata.txt"
 }
 
@@ -170,7 +403,7 @@ _backup_metadata_write() {
 _backup_checksum_write() {
     local dir="$1" f hash
     : >"${dir}/checksums.txt"
-    for f in database.sql "${BACKUP_ARCHIVE_FILES[@]}"; do
+    for f in "$BACKUP_DB_FILE" "$BACKUP_DB_FILE_LEGACY" "${BACKUP_ARCHIVE_FILES[@]}"; do
         [[ -f "${dir}/${f}" ]] || continue
         hash="$(file_sha256 "${dir}/${f}")" || continue
         printf '%s  %s\n' "$hash" "$f" >>"${dir}/checksums.txt"
@@ -341,9 +574,9 @@ backup_list_entries() {
 # restored a snapshot into. Either way this is the only code that touches the
 # live database/volumes/secrets during a restore.
 _restore_apply() {
-    local dir="$1" scope="${2:-db}"
+    local dir="$1" scope="${2:-db}" dump excluded buckets
 
-    [[ -f "${dir}/database.sql" ]] || { log_error "No database.sql in ${dir}"; return 1; }
+    dump="$(_backup_db_file "$dir")" || { log_error "No database dump in ${dir}"; return 1; }
     _backup_checksum_verify "$dir" || die "Backup integrity check failed; refusing to restore from ${dir}."
 
     banner "Restore"
@@ -351,7 +584,13 @@ _restore_apply() {
     cat "${dir}/metadata.txt" 2>/dev/null || true
     printf '\n'
     log_warn "This REPLACES the current database contents."
+    excluded="$(env_get "${dir}/metadata.txt" excluded_data 2>/dev/null || true)"
+    [[ -n "$excluded" ]] && \
+        log_info "Log and telemetry tables were backed up without their data and come back empty: ${excluded}"
     [[ "$scope" == "full" ]] && log_warn "Scope 'full' also replaces Storage files and edge functions."
+    buckets="$(env_get "${dir}/metadata.txt" excluded_storage_buckets 2>/dev/null || true)"
+    [[ "$scope" == "full" && -n "$buckets" ]] && \
+        log_warn "Storage bucket(s) not in this backup: ${buckets}. In-app backups are restored from their own copy destinations; their files here are left as they are."
     confirm "Restore ${scope} from $(basename "$dir")?" n || { log_info "Cancelled."; return 0; }
 
     # Take a safety copy first: a restore that goes wrong should still be
@@ -364,9 +603,11 @@ _restore_apply() {
     log_info "Restoring the database..."
     local cid
     cid="$(_db_container)" || return 1
-    if ! docker exec -i -e PGPASSWORD="$(_db_pass)" "$cid" \
-            psql -U "$(_db_user)" -d "$(_db_name)" -q \
-            <"${dir}/database.sql" >>"${SO_LOG_FILE:-/dev/null}" 2>&1; then
+    # The dump \connects to each database in turn; it starts from this one.
+    if ! ( set -o pipefail
+           _backup_db_cat "$dump" | docker exec -i -e PGPASSWORD="$(_db_pass)" "$cid" \
+               psql -U "$(_db_user)" -d "$(_db_name)" -q \
+               >>"${SO_LOG_FILE:-/dev/null}" 2>&1 ); then
         die "Restore failed. See ${SO_LOG_FILE:-the log}."
     fi
     log_ok "Database restored from $(basename "$dir")"

@@ -227,7 +227,7 @@ actually runs**.
 ├── app/                     the Sentinel Ops checkout
 │   ├── .env                 generated from Supabase config
 │   └── supabase/{migrations,functions}
-├── backups/<timestamp>/     database.sql, storage.tar.gz, functions.tar.gz,
+├── backups/<timestamp>/     database.sql.gz, storage.tar.gz, functions.tar.gz,
 │                            config.tar.gz, checksums.txt, metadata.txt
 ├── logs/                    installer and auto-update logs
 ├── .installer-prev/         installer copy replaced by the last self-update

@@ -22,8 +22,8 @@ enough to rebuild the whole install on a fresh box — not just the database:
 
 ```
 /opt/sentinel-ops/backups/2026-09-11-121500/
-├── database.sql       pg_dumpall --clean --if-exists (roles and all databases)
-├── storage.tar.gz      Supabase Storage's uploaded objects (full backups only)
+├── database.sql.gz     roles + every database, less log data (gzip)
+├── storage.tar.gz      Supabase Storage's uploaded objects, less in-app backups (full backups only)
 ├── functions.tar.gz    the deployed edge functions
 ├── config.tar.gz        supabase/.env + installer.env + the deploy key (chmod 600)
 ├── checksums.txt        sha256 of every file above
@@ -38,6 +38,49 @@ current session and issued token.
 If any archive cannot be written (a full disk, say), the whole backup is
 discarded and the backup fails. A truncated archive is never kept with a
 checksum that vouches for it.
+
+Backups from before the dump was compressed hold `database.sql` instead.
+Restore reads either.
+
+### What a backup leaves out
+
+A backup is for bringing an install back, not for keeping its logs. So the
+dump keeps every table's **definition**, and leaves the **data** of these
+tables out. After a restore they exist, empty, and fill up again on their
+own.
+
+| Database | Tables | What they are |
+|---|---|---|
+| `_supabase` | `_analytics.*` | Logflare's log store: every container's log lines |
+| `postgres` | `auth.audit_log_entries`, `net._http_response`, `cron.job_run_details`, `pgmq.a_*`, `realtime.messages*` | Supabase housekeeping logs and archives |
+| `postgres` | `public.agent_power_windows`, `agent_awake_hours`, `dlp_file_health_samples`, `dlp_event_merges`, `yara_event_receipts`, `yara_agent_event_counters`, `compliance_*_results`, `compliance_eval_pending`, `storage_sweep_runs`, `software_catalog_enrich_runs`, `integration_sync_runs` | Rolling telemetry and derived state the application rebuilds |
+
+Everything else is kept, including users, Vault secrets, MDM certificates
+and recovery keys, and the audit trails (`audit_logs`, `user_activity_logs`,
+`command_audit_logs`, `*_change_audit`). This is a disaster-recovery copy,
+so it does not follow the in-app backup's table selection, which leaves
+secrets out on purpose (see [DECISIONS.md](DECISIONS.md) #35).
+
+Full backups also leave out Storage's `backups` bucket, where the in-app
+backups keep their files. Those are already copies, sent to their own
+destinations. After a full restore, restore in-app backups from there.
+
+To see what takes the space and tune the list:
+
+```bash
+sentinel-ops backup size        # largest tables per database, and whether backups take their data
+```
+
+In `config/installer.env`:
+
+- `BACKUP_EXCLUDE_DATA`: more tables to leave out, space-separated
+  `<database>:<schema>.<table>` patterns with `*`, for example
+  `"postgres:public.alert_events postgres:public.dlp_events"`.
+- `BACKUP_INCLUDE_LOG_DATA=true`: take every table's data, as backups did
+  before.
+
+`metadata.txt` records what each backup left out (`excluded_data`,
+`excluded_storage_buckets`), and a restore prints it.
 
 ### Full and database-only backups
 
@@ -210,4 +253,5 @@ Postgres versions or the backup layout.
 | Rotating a leaked/expired backend credential | `sentinel-ops remote <role> configure` again — it overwrites `config/restic-<role>.env`. |
 | Backup verification fails | The backup is corrupt — do not restore it. Fall back to an older local backup, or a secondary/offsite snapshot: `sentinel-ops restore --from=secondary`. |
 | "Not enough free space for a ... backup" | `sudo sentinel-ops cleanup --dry-run` to see what retention would free, then `sudo sentinel-ops cleanup`. If that is not enough, lower `BACKUP_RETENTION_COUNT`/`BACKUP_RETENTION_MAX_GB` and run cleanup again, or see [OPERATIONS.md](OPERATIONS.md#disk-space). |
-| `backups/` is much bigger than expected | `sentinel-ops backup list` shows each backup's size and scope. Backups taken before database-only backups existed are all full; retention removes them as newer ones arrive, or straight away with `sentinel-ops cleanup`. |
+| Logs or telemetry are empty after a restore | Expected: their data is not backed up (see [What a backup leaves out](#what-a-backup-leaves-out)). They fill up again on their own. |
+| `backups/` is much bigger than expected | `sentinel-ops backup size` shows which tables are large and whether backups take them; add the large regenerable ones to `BACKUP_EXCLUDE_DATA`. `sentinel-ops backup list` shows each backup's size and scope. Backups taken before database-only backups existed are all full; retention removes them as newer ones arrive, or straight away with `sentinel-ops cleanup`. |

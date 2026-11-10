@@ -146,6 +146,9 @@ application update, before every Supabase update and before any restore. A
 full backup captures the whole stack (database, Storage files, edge functions
 and the config needed to rebuild the install). The backups before an
 application update leave Storage out, since those updates never touch it.
+No backup takes log or telemetry data (Logflare's log store, Supabase's
+housekeeping logs, the application's rolling telemetry). Those tables come
+back empty after a restore. `sentinel-ops backup size` shows what is large.
 
 > `restore` replaces the current database contents. It takes a safety copy of
 > the current state first, so a bad restore is still recoverable.

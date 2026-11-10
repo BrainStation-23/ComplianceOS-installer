@@ -53,13 +53,48 @@ cmd_backup() {
                 die "Backup failed verification: $(basename "$target")"
             fi
             ;;
+        size)
+            _backup_size_report "${2:-15}"
+            ;;
         *)
             log_error "Unknown backup subcommand: $1"
-            printf 'Valid: create [--label <text>] [--scope=full|db], list, verify [backup-id]\n'
+            printf 'Valid: create [--label <text>] [--scope=full|db], list, verify [backup-id], size [n]\n'
             return 2
             ;;
     esac
     return 0
+}
+
+# sentinel-ops backup size [n] - the n largest tables of each database, and
+# whether a backup takes their data. What to look at before adding to
+# BACKUP_EXCLUDE_DATA.
+_backup_size_report() {
+    local top="$1" cid db name bytes pats=() i mark kept skipped
+    [[ "$top" =~ ^[1-9][0-9]*$ ]] || top=15
+    cid="$(_db_container)" || die "The database is not running."
+    section "Database size by table"
+    if [[ "${BACKUP_INCLUDE_LOG_DATA:-false}" == "true" ]]; then
+        log_info "BACKUP_INCLUDE_LOG_DATA=true: backups take every table's data."
+    fi
+    while IFS= read -r db; do
+        [[ -n "$db" ]] || continue
+        mapfile -t pats < <(_backup_exclude_patterns "$db")
+        i=0 kept=0 skipped=0
+        printf '\n%s\n' "$db"
+        while IFS='|' read -r name bytes; do
+            [[ "$bytes" =~ ^[0-9]+$ ]] || continue
+            if _backup_matches_any "$name" "${pats[@]}"; then
+                mark="schema only"; skipped=$(( skipped + bytes ))
+            else
+                mark="backed up";   kept=$(( kept + bytes ))
+            fi
+            (( i++ < top )) && printf '  %-56s %10s  %s\n' "$name" "$(human_bytes "$bytes")" "$mark"
+        done < <(_backup_table_sizes "$cid" "$db")
+        printf '  %-56s %10s\n' "total backed up"           "$(human_bytes "$kept")"
+        printf '  %-56s %10s\n' "total left out (schema only)" "$(human_bytes "$skipped")"
+    done < <(_backup_databases "$cid")
+    printf '\nSizes are as Postgres stores them; the compressed dump is much smaller.\n'
+    printf 'Leave more table data out with BACKUP_EXCLUDE_DATA in %s.\n\n' "$CONFIG_FILE"
 }
 
 # ---------------------------------------------------------------------------
@@ -101,9 +136,9 @@ cmd_restore() {
             if restic_restore "$from" "$snapshot" "$staging"; then
                 # restic restores the archived directory under the staging
                 # root, one level down (its own path from when it was backed
-                # up); find the directory that actually holds database.sql.
+                # up); find the directory that actually holds the dump.
                 local restored
-                restored="$(find "$staging" -mindepth 1 -name database.sql -printf '%h\n' 2>/dev/null | head -n1)"
+                restored="$(find "$staging" -mindepth 1 \( -name database.sql.gz -o -name database.sql \) -printf '%h\n' 2>/dev/null | head -n1)"
                 [[ -n "$restored" ]] || die "Restic restore did not produce a recognisable backup directory."
                 _restore_apply "$restored" "$scope"
             else

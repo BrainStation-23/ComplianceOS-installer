@@ -93,6 +93,12 @@ IMAGE_BUILD_CACHE_MAX_AGE="168h"
 # filesystem, 0 is no size limit.
 BACKUP_RETENTION_COUNT="10"
 BACKUP_RETENTION_MAX_GB="auto"
+# Table data a database backup leaves out (lib/backup.sh): logs, telemetry and
+# derived state, on top of the built-in list. Space-separated
+# <database>:<schema>.<table> patterns, * allowed. BACKUP_INCLUDE_LOG_DATA=true
+# turns every exclusion off and dumps everything.
+BACKUP_EXCLUDE_DATA=""
+BACKUP_INCLUDE_LOG_DATA="false"
 # Installer run logs older than this many days are removed (lib/disk.sh); 0
 # keeps them all.
 LOG_RETENTION_DAYS="30"
@@ -178,6 +184,7 @@ config_load() {
                MDM_PROXY_CERTBOT_IMAGE \
                STORAGE_FILE_SIZE_LIMIT IMAGE_CLEANUP_ENABLED IMAGE_BUILD_CACHE_MAX_AGE \
                BACKUP_RETENTION_COUNT BACKUP_RETENTION_MAX_GB LOG_RETENTION_DAYS \
+               BACKUP_EXCLUDE_DATA BACKUP_INCLUDE_LOG_DATA \
                CONTAINER_LOG_MAX_SIZE CONTAINER_LOG_MAX_FILES \
                BACKUP_SCHEDULE_ENABLED BACKUP_SCHEDULE_CALENDAR BACKUP_SCHEDULE_CHECK_DAY \
                RESTIC_SECONDARY_ENABLED RESTIC_SECONDARY_REPOSITORY \
@@ -269,6 +276,8 @@ config_save() {
         printf '# Backups - see docs/BACKUPS.md\n'
         printf 'BACKUP_RETENTION_COUNT=%s\n' "$BACKUP_RETENTION_COUNT"
         printf 'BACKUP_RETENTION_MAX_GB=%s\n' "$BACKUP_RETENTION_MAX_GB"
+        printf 'BACKUP_EXCLUDE_DATA="%s"\n'   "$BACKUP_EXCLUDE_DATA"
+        printf 'BACKUP_INCLUDE_LOG_DATA=%s\n' "$BACKUP_INCLUDE_LOG_DATA"
         printf 'BACKUP_SCHEDULE_ENABLED=%s\n'  "$BACKUP_SCHEDULE_ENABLED"
         printf 'BACKUP_SCHEDULE_CALENDAR=%s\n' "$BACKUP_SCHEDULE_CALENDAR"
         printf 'BACKUP_SCHEDULE_CHECK_DAY=%s\n\n' "$BACKUP_SCHEDULE_CHECK_DAY"
