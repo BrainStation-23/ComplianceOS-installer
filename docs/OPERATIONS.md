@@ -301,6 +301,31 @@ the private key rather than the `.pub`.
 
 Each migration runs in a single transaction together with the row recording it,
 so a failure leaves neither partial schema changes nor a bogus tracking entry.
+
+The failure report on the console shows PostgreSQL's error (with its SQLSTATE,
+`DETAIL`, `HINT` and, for functions and `DO` blocks, `CONTEXT`), the failing
+statement with its line numbers in the migration file, the exact line when
+PostgreSQL gives a position, and a hint for common causes (object already
+exists, missing dependency, permission, existing data violating a new
+constraint, lock timeout). psql's complete output is in the run's log under
+`logs/`, path printed at the end of the report.
+
+```
+[ERROR] Migration failed: 20240104000000_add_x.sql
+        ERROR:  42601: syntax error at or near "c"
+        LINE 4:     c int
+                    ^
+[ERROR] At supabase/migrations/20240104000000_add_x.sql:4 (statement on lines 1-5):
+           1 | CREATE TABLE x (
+           2 |     a int,
+           3 |     b int
+     >     4 |     c int
+           5 | );
+```
+
+Two migration files with the same version prefix are refused before anything
+runs. Otherwise the second would look already applied and never run.
+
 Fix the migration in the repository and re-run `sentinel-ops update app`;
 already-applied migrations are skipped.
 

@@ -114,6 +114,78 @@ db_ensure_replication_role_grant >/dev/null 2>&1; rc="$?"
 check "unreadable version: returns non-zero" "1" "$rc"
 check "unreadable version: no GRANT attempted" "0" "$(grant_calls)"
 
+# --- migration failure reports ------------------------------------------------
+# psql output below is verbatim from psql 15 run with -f - -b -v VERBOSITY=verbose.
+MIG="${T}/20240102000000_fk.sql"
+cat >"$MIG" <<'SQL'
+-- add posts
+CREATE TABLE posts (
+    id int,
+    author int REFERENCES authors(id),
+    body text
+);
+SQL
+cat >"${T}/out" <<'OUT'
+psql:<stdin>:3: NOTICE:  something harmless
+psql:<stdin>:6: ERROR:  42P01: relation "authors" does not exist
+LOCATION:  RangeVarGetRelidExtended, namespace.c:433
+psql:<stdin>:6: STATEMENT:  CREATE TABLE posts (
+    id int,
+    author int REFERENCES authors(id),
+    body text
+);
+OUT
+out="$(_migration_report_failure "$MIG" "${T}/out" 3 2>&1)"
+check "report: shows the error with SQLSTATE" "1" \
+    "$(printf '%s\n' "$out" | grep -c 'ERROR:  42P01: relation "authors" does not exist')"
+check "report: locates the statement in the file" "1" \
+    "$(printf '%s\n' "$out" | grep -c 'supabase/migrations/20240102000000_fk.sql, statement on lines 2-6')"
+check "report: prints the source lines" "1" \
+    "$(printf '%s\n' "$out" | grep -c '4 |     author int REFERENCES authors(id),')"
+check "report: hints at migration order" "1" "$(printf '%s\n' "$out" | grep -c 'Hint (42P01)')"
+check "report: drops LOCATION and NOTICE noise" "0" "$(printf '%s\n' "$out" | grep -cE 'LOCATION|NOTICE')"
+
+MIG="${T}/20240104000000_syntax.sql"
+printf 'CREATE TABLE x (\n    a int,\n    b int\n    c int\n);\n' >"$MIG"
+cat >"${T}/out" <<'OUT'
+psql:<stdin>:5: ERROR:  42601: syntax error at or near "c"
+LINE 4:     c int
+            ^
+LOCATION:  scanner_yyerror, scan.l:1188
+psql:<stdin>:5: STATEMENT:  CREATE TABLE x (
+    a int,
+    b int
+    c int
+);
+OUT
+out="$(_migration_report_failure "$MIG" "${T}/out" 3 2>&1)"
+check "report: LINE n points at the exact file line" "1" \
+    "$(printf '%s\n' "$out" | grep -c '20240104000000_syntax.sql:4 (statement on lines 1-5)')"
+check "report: marks that line" "1" "$(printf '%s\n' "$out" | grep -cE '^ +> +4 \|     c int')"
+
+MIG="${T}/20240106000000_nosemi.sql"
+printf 'CREATE TABLE users (id int)' >"$MIG"
+cat >"${T}/out" <<'OUT'
+psql:<stdin>:2: ERROR:  42601: syntax error at or near "INSERT"
+LINE 2: INSERT INTO supabase_migrations.schema_migrations (version, ...
+        ^
+psql:<stdin>:2: STATEMENT:  CREATE TABLE users (id int)
+INSERT INTO supabase_migrations.schema_migrations (version, name) VALUES ('20240106000000', 'nosemi');
+OUT
+out="$(_migration_report_failure "$MIG" "${T}/out" 3 2>&1)"
+check "report: missing final semicolon is named" "1" \
+    "$(printf '%s\n' "$out" | grep -c 'missing its terminating semicolon')"
+
+printf 'Error response from daemon: No such container: abc\n' >"${T}/out"
+out="$(_migration_report_failure "$MIG" "${T}/out" 1 2>&1)"
+check "report: docker failure explained" "1" "$(printf '%s\n' "$out" | grep -c 'Docker could not run psql')"
+check "report: docker message shown" "1" "$(printf '%s\n' "$out" | grep -c 'No such container')"
+
+check "duplicate versions found" "20240101000000" \
+    "$(_migration_duplicate_versions /m/20240101000000_a.sql /m/20240101000000_b.sql /m/20240102000000_c.sql)"
+check "no duplicate versions" "" \
+    "$(_migration_duplicate_versions /m/20240101000000_a.sql /m/20240102000000_c.sql)"
+
 rm -rf "$T"
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 (( fail == 0 ))
