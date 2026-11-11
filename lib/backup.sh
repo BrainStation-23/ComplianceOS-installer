@@ -99,7 +99,7 @@ backup_create() {
     mkdir -p "$dir"
 
     log_info "Backing up the database to ${dir}..." >&2
-    if ! ( set -o pipefail; _backup_dump_stream "$cid" | _backup_gzip >"${dir}/${BACKUP_DB_FILE}" ); then
+    if ! _backup_dump_with_progress "$cid" "${dir}/${BACKUP_DB_FILE}"; then
         log_error "Database dump failed." >&2
         rm -rf "$dir"
         return 1
@@ -234,24 +234,175 @@ _backup_databases() {
 #
 # No --create: Supabase creates its databases itself, and dropping
 # _supabase while Logflare is connected to it would fail the restore.
+#
+# With BACKUP_PROGRESS_DIR set (_backup_dump_with_progress), pg_dump runs
+# --verbose into ${BACKUP_PROGRESS_DIR}/pg_dump.log, and the database being
+# dumped is written to ${BACKUP_PROGRESS_DIR}/database.
 _backup_dump_stream() {
-    local cid="$1" db dbs=() args=()
+    local cid="$1" db dbs=() args=() n=0 err="${SO_LOG_FILE:-/dev/null}" verbose=()
     mapfile -t dbs < <(_backup_databases "$cid")
     if (( ${#dbs[@]} == 0 )); then
         log_error "Could not list the databases to back up." >&2
         return 1
     fi
+    if [[ -n "${BACKUP_PROGRESS_DIR:-}" ]]; then
+        err="${BACKUP_PROGRESS_DIR}/pg_dump.log"
+        verbose=(--verbose)
+    fi
     docker exec -e PGPASSWORD="$(_db_pass)" "$cid" \
         pg_dumpall -U "$(_db_user)" --globals-only --clean --if-exists \
-        2>>"${SO_LOG_FILE:-/dev/null}" || return 1
+        2>>"$err" || return 1
     for db in "${dbs[@]}"; do
         [[ -n "$db" ]] || continue
+        n=$(( n + 1 ))
+        [[ -n "${BACKUP_PROGRESS_DIR:-}" ]] && printf '%s (%d/%d)\n' "$db" "$n" "${#dbs[@]}" >"${BACKUP_PROGRESS_DIR}/database"
         mapfile -t args < <(_backup_exclude_args "$db")
         printf '\n\\connect "%s"\n\n' "$db"
         docker exec -e PGPASSWORD="$(_db_pass)" "$cid" \
-            pg_dump -U "$(_db_user)" -d "$db" --clean --if-exists "${args[@]}" \
-            2>>"${SO_LOG_FILE:-/dev/null}" || return 1
+            pg_dump -U "$(_db_user)" -d "$db" --clean --if-exists "${verbose[@]}" "${args[@]}" \
+            2>>"$err" || return 1
     done
+}
+
+# ---------------------------------------------------------------------------
+# Progress while dumping
+#
+# A large database takes minutes to dump, and the dump used to print nothing
+# until it finished, so an update looked stuck. While it runs this shows how
+# much has been dumped (of about how much), how much is on disk, the rate,
+# the elapsed time and the table being dumped: on a terminal as one line
+# redrawn in place, otherwise (logs, scheduled backups, auto-update) as a log
+# line every BACKUP_PROGRESS_INTERVAL seconds. Everything goes to stderr:
+# callers read the backup directory from stdout.
+# ---------------------------------------------------------------------------
+
+BACKUP_PROGRESS_INTERVAL="${BACKUP_PROGRESS_INTERVAL:-30}"
+
+# Whether this dd reports bytes copied (GNU coreutils' status=progress).
+_backup_dd_progress_supported() {
+    dd if=/dev/null of=/dev/null status=progress 2>/dev/null
+}
+
+# stdin to stdout, unchanged, with the bytes copied so far reported into $1.
+_backup_count_bytes() {
+    if _backup_dd_progress_supported; then
+        dd bs=1M status=progress 2>"$1"
+    else
+        cat
+    fi
+}
+
+# Bytes copied so far, from _backup_count_bytes' report; empty when unknown.
+_backup_counted_bytes() {
+    [[ -s "$1" ]] || return 0
+    tr '\r' '\n' <"$1" | grep -oE '^[0-9]+ bytes' | tail -n 1 | cut -d' ' -f1 || true
+}
+
+# The table pg_dump is writing now, from its --verbose output.
+_backup_current_table() {
+    [[ -s "$1" ]] || return 0
+    grep -oE 'dumping contents of table "[^"]+"' "$1" | tail -n 1 \
+        | sed -E 's/dumping contents of table "([^"]+)"/\1/' || true
+}
+
+# Table data the dump will write, roughly: the size of every table's data
+# (indexes aren't dumped) in every database, less the tables left out.
+_backup_data_estimate() {
+    local cid="$1" db name bytes total=0 pats=()
+    while IFS= read -r db; do
+        [[ -n "$db" ]] || continue
+        mapfile -t pats < <(_backup_exclude_patterns "$db")
+        while IFS='|' read -r name bytes; do
+            [[ "$bytes" =~ ^[0-9]+$ ]] || continue
+            (( ${#pats[@]} )) && _backup_matches_any "$name" "${pats[@]}" && continue
+            total=$(( total + bytes ))
+        done < <(docker exec -e PGPASSWORD="$(_db_pass)" "$cid" \
+                    psql -U "$(_db_user)" -d "$db" -tAF'|' -c \
+                    "SELECT n.nspname || '.' || c.relname, pg_table_size(c.oid)
+                       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                      WHERE c.relkind IN ('r', 'm')" 2>>"${SO_LOG_FILE:-/dev/null}" | tr -d '\r')
+    done < <(_backup_databases "$cid")
+    printf '%s' "$total"
+}
+
+_backup_duration() {
+    local s="$1"
+    if (( s >= 3600 )); then printf '%dh%02dm' $(( s / 3600 )) $(( s % 3600 / 60 ))
+    elif (( s >= 60 )); then printf '%dm%02ds' $(( s / 60 )) $(( s % 60 ))
+    else printf '%ds' "$s"; fi
+}
+
+# One progress line. _backup_progress_line <dumped> <estimate> <written> <seconds> <database> <table>
+_backup_progress_line() {
+    local dumped="$1" estimate="$2" written="$3" secs="$4" db="$5" table="$6" line pct
+    if [[ "$dumped" =~ ^[0-9]+$ ]]; then
+        line="$(human_bytes "$dumped") dumped"
+        if [[ "$estimate" =~ ^[0-9]+$ ]] && (( estimate > 0 )); then
+            pct=$(( dumped * 100 / estimate ))
+            (( pct > 99 )) && pct=99
+            line+=" of about $(human_bytes "$estimate") (${pct}%)"
+        fi
+        line+=", $(human_bytes "$written") written"
+        (( secs > 0 )) && line+=", $(human_bytes $(( dumped / secs )))/s"
+    else
+        line="$(human_bytes "$written") written"
+    fi
+    line+=", $(_backup_duration "$secs")"
+    [[ -n "$db" ]] && line+=" - ${db}"
+    [[ -n "$table" ]] && line+=": ${table}"
+    printf '%s' "$line"
+}
+
+# _backup_dump_with_progress <db-container> <output .sql.gz>
+_backup_dump_with_progress() {
+    local cid="$1" out="$2" work estimate pid rc=0 start=$SECONDS secs last=0 tty="false" line
+    work="$(mktemp -d)" || return 1
+    estimate="$(_backup_data_estimate "$cid" 2>/dev/null)" || estimate=""
+    # BACKUP_PROGRESS_TTY=true|false overrides the terminal check (tests).
+    case "${BACKUP_PROGRESS_TTY:-auto}" in
+        true|false) tty="$BACKUP_PROGRESS_TTY" ;;
+        *) [[ -t 2 ]] && tty="true" ;;
+    esac
+
+    ( set -o pipefail
+      BACKUP_PROGRESS_DIR="$work" _backup_dump_stream "$cid" \
+          | _backup_count_bytes "${work}/bytes" \
+          | _backup_gzip >"$out" ) &
+    pid=$!
+
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 1
+        secs=$(( SECONDS - start ))
+        if [[ "$tty" == "true" ]]; then
+            (( secs % 2 == 0 )) || continue
+        elif (( secs - last < BACKUP_PROGRESS_INTERVAL )); then
+            continue
+        fi
+        last=$secs
+        line="$(_backup_progress_line "$(_backup_counted_bytes "${work}/bytes")" "$estimate" \
+            "$(stat -c%s "$out" 2>/dev/null || printf '0')" "$secs" \
+            "$(cat "${work}/database" 2>/dev/null || true)" "$(_backup_current_table "${work}/pg_dump.log")")"
+        if [[ "$tty" == "true" ]]; then
+            printf '\r\033[K        %s' "$line" >&2
+        else
+            log_info "  ${line}" >&2
+        fi
+    done
+    wait "$pid" || rc=$?
+    [[ "$tty" == "true" ]] && printf '\r\033[K' >&2
+
+    # pg_dump's --verbose output stays out of the log; its warnings and
+    # errors don't.
+    [[ -s "${work}/pg_dump.log" && -n "${SO_LOG_FILE:-}" ]] && \
+        grep -iE 'error|warning|fatal|detail|hint' "${work}/pg_dump.log" 2>/dev/null >>"$SO_LOG_FILE" || true
+    if (( rc != 0 )); then
+        grep -iE 'error|fatal' "${work}/pg_dump.log" 2>/dev/null | tail -n 5 | sed 's/^/        /' >&2 || true
+    else
+        secs=$(( SECONDS - start ))
+        log_info "  Dumped $(human_bytes "$(_backup_counted_bytes "${work}/bytes" | grep . || stat -c%s "$out")") in $(_backup_duration "$secs") ($(human_bytes "$(stat -c%s "$out" 2>/dev/null || printf '0')") compressed)" >&2
+    fi
+    rm -rf "$work"
+    return "$rc"
 }
 
 # gzip from stdin to stdout. --rsyncable keeps unchanged stretches of the
