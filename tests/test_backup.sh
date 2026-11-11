@@ -205,7 +205,9 @@ check "a realtime partition is excluded"          "out" "$(_ex postgres realtime
 check "a pgmq archive is excluded"                "out" "$(_ex postgres pgmq.a_backup_table_queue)"
 check "a derived app table is excluded"           "out" "$(_ex postgres public.agent_power_windows)"
 check "pgmq queues themselves are kept"           "in"  "$(_ex postgres pgmq.q_backup_table_queue)"
-check "audit_logs is kept (compliance evidence)"  "in"  "$(_ex postgres public.audit_logs)"
+check "audit_logs (agent log ingest) is excluded" "out" "$(_ex postgres public.audit_logs)"
+check "an audit_logs daily partition is excluded" "out" "$(_ex postgres public.audit_logs_y2026m11d10)"
+check "audit_logs' default partition is excluded" "out" "$(_ex postgres public.audit_logs_default)"
 check "user_activity_logs is kept"                "in"  "$(_ex postgres public.user_activity_logs)"
 check "command_audit_logs is kept"                "in"  "$(_ex postgres public.command_audit_logs)"
 check "auth.users is kept"                        "in"  "$(_ex postgres auth.users)"
@@ -264,6 +266,8 @@ check "pg_dump gets the _supabase exclusions" "1" \
     "$(grep 'pg_dump -U postgres -d _supabase' "$DOCKER_LOG" | grep -c -- '--exclude-table-data=_analytics.\*')"
 check "pg_dump gets the postgres exclusions" "1" \
     "$(grep 'pg_dump -U postgres -d postgres' "$DOCKER_LOG" | grep -c -- '--exclude-table-data=auth.audit_log_entries')"
+check "pg_dump leaves out audit_logs and its partitions" "1" \
+    "$(grep 'pg_dump -U postgres -d postgres' "$DOCKER_LOG" | grep -c -- '--exclude-table-data=public.audit_logs\*')"
 check "no database is dumped with --create" "0" "$(grep -c -- '--create' "$DOCKER_LOG")"
 
 DUMP_FAIL_DB="_supabase"
@@ -308,11 +312,11 @@ check "a db backup records no buckets" "" "$(env_get "${D8}/metadata.txt" exclud
 _backup_table_sizes() {
     case "$2" in
         _supabase) printf '_analytics.log_events_1|700\n_analytics.sources|100\npublic.keep|50\n' ;;
-        postgres)  printf 'public.audit_logs|300\nauth.audit_log_entries|20\npublic.agents|10\n' ;;
+        postgres)  printf 'public.audit_logs_y2026m11d10|250\npublic.audit_logs_default|50\nauth.audit_log_entries|20\npublic.command_audit_logs|40\npublic.agents|10\n' ;;
     esac
 }
 check "excluded bytes in _supabase" "800" "$(_backup_excluded_db_bytes cid _supabase)"
-check "excluded bytes in postgres"  "20"  "$(_backup_excluded_db_bytes cid postgres)"
+check "excluded bytes in postgres"  "320" "$(_backup_excluded_db_bytes cid postgres)"
 BACKUP_INCLUDE_LOG_DATA="true"
 check "nothing excluded when log data is included" "0" "$(_backup_excluded_db_bytes cid _supabase)"
 BACKUP_INCLUDE_LOG_DATA="false"

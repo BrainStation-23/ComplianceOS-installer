@@ -946,12 +946,41 @@ because the registry says so only in its free-text `reason` column. If that
 list starts to drift, the fix is a structured `regenerable` column in the
 registry, read here.
 
-Audit trails stay in (`audit_logs`, `user_activity_logs`,
-`command_audit_logs`, the `*_change_audit` tables). They look like logs, but
-for a compliance product they are evidence.
+Audit trails stay in (`user_activity_logs`, `command_audit_logs`, the
+`*_change_audit` tables). They look like logs, but for a compliance product
+they are evidence. `audit_logs` was first kept with them, and is now left
+out; see 36.
 
 **The in-app backups' bucket leaves `storage.tar.gz`.** Those backups are
 already copies, sent to their own destinations. Archiving them again inside
 every full installer backup only doubled their size. Their `storage.objects`
 and `public.backups` rows are still in the dump. After a full restore, the
 files are wherever their destinations kept them, and the restore says so.
+
+---
+
+## 36. `audit_logs` and its partitions leave the database dump
+
+35 kept `public.audit_logs` as an audit trail. It is not one: despite the
+name, it is the agents' log ingest (`device_id`, `log_category`,
+`event_type`, `event_data`), and it was most of every backup, taken again
+before every application update.
+
+The application treats it as rolling data. It is partitioned by day
+(`audit_logs_yYYYYmMMdDD`, plus `audit_logs_default`), and the
+`audit-logs-rollover` cron job drops partitions older than 7 days. A backup
+copy of it is out of date within a week, and nothing references it by
+foreign key, so a restore with it empty is consistent.
+
+**The pattern is `postgres:public.audit_logs*`, not the table name.**
+`pg_dump` writes each partition's data as its own table, so
+`--exclude-table-data=public.audit_logs` alone would still dump every row.
+PostgreSQL 16's `--exclude-table-data-and-children` would cover that, but
+Supabase runs 15. The `*` matches the parent, the daily partitions and the
+default partition, and nothing else (`command_audit_logs` and
+`user_activity_logs` do not start with `audit_logs`). It is the same
+approach as `realtime.messages*`.
+
+The real audit trails, `user_activity_logs`, `command_audit_logs` and the
+`*_change_audit` tables, stay in. `BACKUP_INCLUDE_LOG_DATA=true` still
+takes everything.
