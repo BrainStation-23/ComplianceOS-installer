@@ -255,3 +255,22 @@ Postgres versions or the backup layout.
 | "Not enough free space for a ... backup" | `sudo sentinel-ops cleanup --dry-run` to see what retention would free, then `sudo sentinel-ops cleanup`. If that is not enough, lower `BACKUP_RETENTION_COUNT`/`BACKUP_RETENTION_MAX_GB` and run cleanup again, or see [OPERATIONS.md](OPERATIONS.md#disk-space). |
 | Logs or telemetry are empty after a restore | Expected: their data is not backed up (see [What a backup leaves out](#what-a-backup-leaves-out)). They fill up again on their own. |
 | `backups/` is much bigger than expected | `sentinel-ops backup size` shows which tables are large and whether backups take them; add the large regenerable ones to `BACKUP_EXCLUDE_DATA`. `sentinel-ops backup list` shows each backup's size and scope. Backups taken before database-only backups existed are all full; retention removes them as newer ones arrive, or straight away with `sentinel-ops cleanup`. |
+
+### A backup seems stuck
+
+Dumping a large database takes minutes. While it runs, the backup shows its
+progress: how much has been dumped (of about how much: the size of the tables'
+data, without indexes), how much is on disk after compression, the rate, the
+elapsed time and the table being dumped:
+
+```
+[INFO]    1.0 GiB dumped of about 1.1 GiB (90%), 157.5 MiB written, 86.5 MiB/s, 12s - postgres (1/3): public.audit_logs_y2026m11d10
+[INFO]    Dumped 1.0 GiB in 12s (157.5 MiB compressed)
+```
+
+On a terminal it is one line redrawn in place. In logs, scheduled backups and
+automatic updates it is a line every `BACKUP_PROGRESS_INTERVAL` seconds (30).
+The byte counts need GNU `dd` (`status=progress`); without it the line shows
+the compressed size and the table only. If the table and the counts stop
+changing for a long time, check the database's activity
+(`pg_stat_activity`) for a lock or a slow disk.
