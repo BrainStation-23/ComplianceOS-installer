@@ -363,6 +363,12 @@ or `40P01` (deadlock), and the report names the session that held the lock.
 Wait for it to finish, or stop it, and run the update again. Background jobs
 are resumed either way.
 
+Which migrations are pending is worked out by the database (the file versions
+not in `supabase_migrations.schema_migrations`), and each migration checks again
+in its own transaction, before any of its SQL runs, that its version isn't
+recorded yet. One that is gets `Already recorded; skipped without running it.`
+instead of running a second time.
+
 Two migration files with the same version prefix are refused before anything
 runs. Otherwise the second would look already applied and never run.
 

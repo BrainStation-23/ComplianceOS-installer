@@ -482,6 +482,43 @@ _migration_report_blockers() {
     done <<<"$rows"
 }
 
+# The versions of the given migration files that are not recorded yet, one per
+# line, worked out by the database.
+#
+# This used to read every recorded version and compare in the shell. On some
+# servers that read came back without a few rows now and then, so a migration
+# applied long ago looked pending: its SQL ran again and only the tracking
+# row's primary key stopped it, failing the update on a different file each
+# time. Asking the database for what is missing returns only pending versions,
+# and the end marker shows the answer arrived whole; an incomplete answer is
+# read again. _apply_pending_migrations still checks each version in its own
+# transaction before running it.
+_migrations_pending_versions() {
+    local marker="-- end of pending list --"
+    local values="" f v
+    for f in "$@"; do
+        v="$(_migration_version "$(basename "$f")")"
+        values+="${values:+,}('$(_sql_quote "$v")')"
+    done
+    local sql="SELECT v FROM (
+                   SELECT f.v, 0 AS o FROM (VALUES ${values}) AS f(v)
+                    WHERE NOT EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations m WHERE m.version = f.v)
+                   UNION ALL SELECT '${marker}', 1) x
+               ORDER BY o, v;"
+    local out attempt
+    for attempt in 1 2 3; do
+        out="$(db_query "$sql")" || out=""
+        if [[ "$(tail -n 1 <<<"$out")" == "$marker" ]]; then
+            sed '$d' <<<"$out"
+            return 0
+        fi
+        log_warn "Reading the pending migrations returned an incomplete answer ($(grep -c . <<<"$out") line(s)); reading again (${attempt}/3)."
+        _log_to_file "[DEBUG] incomplete pending-migration answer: ${out}"
+    done
+    log_error "Could not read which migrations are pending: the database's answer was incomplete 3 times. Nothing was applied."
+    return 1
+}
+
 # Apply every pending migration, in filename order.
 #
 # Each migration runs in a single transaction together with the row that
@@ -505,9 +542,6 @@ deploy_migrations() {
     # Background jobs a killed earlier run left paused, also when nothing is
     # pending now (#33).
     cron_jobs_resume_paused || true
-
-    local applied_list
-    applied_list="$(db_query "SELECT version FROM supabase_migrations.schema_migrations;")" || applied_list=""
 
     local files=() f
     while IFS= read -r f; do files+=("$f"); done < <(find "$dir" -maxdepth 1 -name '*.sql' -type f | LC_ALL=C sort)
@@ -533,14 +567,17 @@ deploy_migrations() {
         return 1
     fi
 
+    local pending_versions
+    pending_versions="$(_migrations_pending_versions "${files[@]}")" || return 1
+
     local pending=() base version
     for f in "${files[@]}"; do
         base="$(basename "$f")"
         version="$(_migration_version "$base")"
-        if printf '%s\n' "$applied_list" | grep -qx "$version"; then
-            log_debug "already applied: ${base}"
-        else
+        if grep -qxF -- "$version" <<<"$pending_versions"; then
             pending+=("$f")
+        else
+            log_debug "already applied: ${base}"
         fi
     done
 
@@ -561,7 +598,7 @@ deploy_migrations() {
 
 # Apply the given migration files in order; stops at the first failure.
 _apply_pending_migrations() {
-    local count=0 out rc f base version attempt sqlstate delay
+    local count=0 skipped=0 out rc f base version attempt sqlstate delay
     out="$(mktemp)"
     for f in "$@"; do
         base="$(basename "$f")"
@@ -570,7 +607,7 @@ _apply_pending_migrations() {
         name="$(_migration_name "$base")"
 
         log_info "  ${base}"
-        attempt=0
+        attempt=0; sqlstate=""
         while :; do
             # -f - makes psql prefix each message with the input line, -b
             # echoes the failing statement, and verbose errors carry the
@@ -578,6 +615,11 @@ _apply_pending_migrations() {
             # transaction (55P03) instead of queueing everyone behind it.
             rc=0
             {
+                # On the file's first line, so psql's line numbers still match
+                # the file: if the version is already recorded, stop before any
+                # of its SQL runs (SOMIG) instead of running it again.
+                printf 'DO $so_guard$ BEGIN IF EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = %s%s%s) THEN RAISE EXCEPTION %sAlready recorded%s USING ERRCODE = %sSOMIG%s; END IF; END $so_guard$; ' \
+                    "'" "$(_sql_quote "$version")" "'" "'" "'" "'" "'"
                 cat "$f"
                 printf '\nINSERT INTO supabase_migrations.schema_migrations (version, name) VALUES (%s%s%s, %s%s%s);\n' \
                     "'" "$(_sql_quote "$version")" "'" "'" "$(_sql_quote "$name")" "'"
@@ -591,6 +633,7 @@ _apply_pending_migrations() {
             (( rc == 0 )) && break
 
             sqlstate="$(_migration_sqlstate "$out")"
+            [[ "$sqlstate" == "SOMIG" ]] && break
             [[ "$sqlstate" == "55P03" || "$sqlstate" == "40P01" ]] || break
             if (( attempt >= SO_MIGRATION_LOCK_RETRIES )); then
                 log_error "  Still blocked after ${SO_MIGRATION_LOCK_RETRIES} retries:"
@@ -608,6 +651,12 @@ _apply_pending_migrations() {
             sleep "$delay"
         done
 
+        if (( rc != 0 )) && [[ "$sqlstate" == "SOMIG" ]]; then
+            log_warn "  Already recorded; skipped without running it."
+            skipped=$(( skipped + 1 ))
+            continue
+        fi
+
         if (( rc != 0 )); then
             _migration_report_failure "$f" "$out" "$rc"
             log_error "The transaction was rolled back; the database is unchanged by this migration."
@@ -621,6 +670,7 @@ _apply_pending_migrations() {
     rm -f "$out"
 
     log_ok "Applied ${count} migration(s)"
+    (( skipped > 0 )) && log_warn "${skipped} migration(s) listed as pending were already recorded and were skipped."
     return 0
 }
 

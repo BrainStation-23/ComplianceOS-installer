@@ -35,6 +35,7 @@ APPLIED="${T}/applied"    # recorded versions
 ATTEMPTS="${T}/attempts"  # one line per migration transaction: "<pgoptions>|<active jobs at the time>"
 CRON_OPS="${T}/cron_ops"  # "<user>|pause|resume"
 LOCK_FAILS="${T}/lock_fails"  # how many more migration attempts fail with 55P03
+CUT_ANSWERS="${T}/cut_answers"  # how many more pending-list answers arrive without their end marker
 FAKE_CRON="true"
 RUNNING="${T}/running"    # what _cron_running_jobs returns; one line per check ("always:" repeats)
 FAKE_SYNTAX_ERROR="false"
@@ -78,8 +79,27 @@ docker() {
             fi
             ;;
         *pg_locks*) printf '4123|pg_cron: agent-ingest-drain-1m|22|select public._agent_ingest_drain()\n' ;;
-        "SELECT version FROM supabase_migrations.schema_migrations;") cat "$APPLIED" ;;
+        "SELECT version FROM supabase_migrations.schema_migrations;")
+            printf 'whole list read\n' >>"${T}/whole_reads"; cat "$APPLIED" ;;
+        *"end of pending list"*)
+            # The versions sent that aren't recorded, then the end marker -
+            # unless this answer is to arrive cut off (CUT_ANSWERS > 0).
+            local v cut
+            for v in $(grep -oE "\('[0-9]+'\)" <<<"$sql" | tr -d "()'"); do
+                grep -qxF "$v" "$APPLIED" || printf '%s\n' "$v"
+            done
+            cut="$(cat "$CUT_ANSWERS")"
+            if (( cut > 0 )); then printf '%s\n' "$(( cut - 1 ))" >"$CUT_ANSWERS"; return 0; fi
+            printf -- '-- end of pending list --\n'
+            ;;
         *"INSERT INTO supabase_migrations.schema_migrations"*)
+            # The guard runs first: a recorded version stops before its SQL.
+            local guarded
+            guarded="$(sed -nE "s/.*WHERE version = '([0-9]+)'.*/\1/p" <<<"$sql" | head -1)"
+            if [[ -n "$guarded" ]] && grep -qxF "$guarded" "$APPLIED"; then
+                printf 'psql:<stdin>:1: ERROR:  SOMIG: Already recorded\n'
+                return 3
+            fi
             printf '%s|%s\n' "$pgoptions" "$(_active_jobs)" >>"$ATTEMPTS"
             local left
             left="$(cat "$LOCK_FAILS")"
@@ -100,7 +120,8 @@ docker() {
 
 _reset() {
     printf '1 t\n2 t\n3 f\n' >"$JOBS"
-    : >"$APPLIED"; : >"$ATTEMPTS"; : >"$CRON_OPS"; : >"${T}/sleeps"
+    : >"$APPLIED"; : >"$ATTEMPTS"; : >"$CRON_OPS"; : >"${T}/sleeps"; : >"${T}/whole_reads"
+    printf '0\n' >"$CUT_ANSWERS"
     printf '0\n' >"$LOCK_FAILS"
     rm -rf "$STATE_DIR" "${MIGS:?}"/*
     : >"$RUNNING"
@@ -208,6 +229,45 @@ deploy_migrations >/dev/null 2>&1; rc=$?
 check "no pg_cron: succeeds" "0" "$rc"
 check "no pg_cron: nothing paused" "" "$(cat "$CRON_OPS")"
 check "no pg_cron: recorded" "20990101000000" "$(cat "$APPLIED")"
+
+# --- the database says what is pending; recorded files are not applied -------
+_reset
+add_migration 20990101000000_old
+add_migration 20990102000000_new
+printf '20990101000000\n' >"$APPLIED"
+out="$(deploy_migrations 2>&1)"; rc=$?
+check "pending from db: succeeds" "0" "$rc"
+check "pending from db: only the new one applied" "1" "$(wc -l <"$ATTEMPTS" | tr -d ' ')"
+check "pending from db: both recorded once" "20990101000000 20990102000000" "$(paste -sd' ' "$APPLIED")"
+check "pending from db: the whole list is never read" "0" "$(wc -l <"${T}/whole_reads" | tr -d ' ')"
+
+# --- an answer cut off before its end marker is read again -----------------
+_reset
+add_migration 20990101000000_one
+printf '1\n' >"$CUT_ANSWERS"
+out="$(deploy_migrations 2>&1)"; rc=$?
+check "cut answer: succeeds" "0" "$rc"
+check "cut answer: says it read again" "1" "$(printf '%s\n' "$out" | grep -c 'incomplete answer')"
+check "cut answer: applied" "20990101000000" "$(cat "$APPLIED")"
+
+_reset
+add_migration 20990101000000_one
+printf '3\n' >"$CUT_ANSWERS"
+out="$(deploy_migrations 2>&1)"; rc=$?
+check "cut 3 times: fails" "1" "$rc"
+check "cut 3 times: nothing applied" "" "$(cat "$APPLIED")"
+check "cut 3 times: jobs never paused" "" "$(cat "$CRON_OPS")"
+
+# --- a recorded file handed in as pending is skipped, its SQL not run ------
+_reset
+add_migration 20990101000000_one
+add_migration 20990102000000_two
+printf '20990101000000\n' >"$APPLIED"
+out="$(_apply_pending_migrations "${MIGS}/20990101000000_one.sql" "${MIGS}/20990102000000_two.sql" 2>&1)"; rc=$?
+check "recorded: succeeds" "0" "$rc"
+check "recorded: its SQL never reached the migration step" "1" "$(wc -l <"$ATTEMPTS" | tr -d ' ')"
+check "recorded: the next one still applied" "20990101000000 20990102000000" "$(paste -sd' ' "$APPLIED")"
+check "recorded: says it skipped" "1" "$(printf '%s\n' "$out" | grep -c 'Already recorded; skipped without running it')"
 
 # --- nothing pending: jobs untouched -----------------------------------------
 _reset
