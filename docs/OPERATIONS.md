@@ -399,7 +399,7 @@ Edit `/opt/sentinel-ops/config/installer.env`, then apply:
 | `APP_BRANCH` | `sentinel-ops branch set <name>` (saves and deploys in one step) |
 | `APP_REPOSITORY` | `sentinel-ops update app` |
 | `APP_BIND`, `APP_PORT` | `sentinel-ops update app` |
-| `ENABLE_LOGFLARE` | `sentinel-ops install` (re-runs the analytics phase) |
+| `ENABLE_LOGFLARE` | `sentinel-ops logflare enable` / `disable` (sets it and applies it) |
 | `STORAGE_FILE_SIZE_LIMIT` | `sentinel-ops repair apply` (rewrites the storage overlay and recreates `storage`) |
 | `IMAGE_CLEANUP_ENABLED`, `IMAGE_BUILD_CACHE_MAX_AGE` | Nothing - read by the next update or `sentinel-ops cleanup` |
 

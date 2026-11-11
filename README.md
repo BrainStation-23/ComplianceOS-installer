@@ -152,6 +152,7 @@ switches over with a config change and a restart — no reinstall.
 | `sentinel-ops network [status\|enable\|disable]` | Expose (or restrict) the frontend and Supabase API directly on the LAN |
 | `sentinel-ops domain [status\|set <hostname>]` | Point the stack at a real domain (config + restart, no reinstall) |
 | `sentinel-ops azure [status\|enable\|disable]` | Configure Azure AD (Microsoft Entra ID) sign-in |
+| `sentinel-ops logflare [status\|enable\|disable]` | Turn Supabase Analytics (Logflare + vector) on or off; collected logs are kept - see [LOGFLARE.md](docs/LOGFLARE.md) |
 | `sentinel-ops auth [status\|enable\|disable] <feature>` | Optional Supabase Auth hardening - see [AUTH-HARDENING.md](docs/AUTH-HARDENING.md) |
 | `sentinel-ops mdm-proxy [status\|enable\|disable\|sync-cert]` | Windows MDM check-ins on a port of their own (they need the PC's client certificate, and enrollment on 443 must not be asked for one); its certificate from Zoraxy's files or from Let's Encrypt through Cloudflare DNS (`--cloudflare`) - see [WINDOWS-MDM.md](docs/WINDOWS-MDM.md) |
 | `sentinel-ops repair [check\|apply]` | Validate `supabase/.env` for known mechanical mistakes and fix them; check/apply the backup restore grant, the storage upload limit and the container log limits |
