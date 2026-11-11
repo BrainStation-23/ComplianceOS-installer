@@ -54,9 +54,10 @@ own.
 | `_supabase` | `_analytics.*` | Logflare's log store: every container's log lines |
 | `postgres` | `auth.audit_log_entries`, `net._http_response`, `cron.job_run_details`, `pgmq.a_*`, `realtime.messages*` | Supabase housekeeping logs and archives |
 | `postgres` | `public.agent_power_windows`, `agent_awake_hours`, `dlp_file_health_samples`, `dlp_event_merges`, `yara_event_receipts`, `yara_agent_event_counters`, `compliance_*_results`, `compliance_eval_pending`, `storage_sweep_runs`, `software_catalog_enrich_runs`, `integration_sync_runs` | Rolling telemetry and derived state the application rebuilds |
+| `postgres` | `public.audit_logs*`: the table and all its daily partitions | Agent log ingest, which the application itself drops after 7 days |
 
 Everything else is kept, including users, Vault secrets, MDM certificates
-and recovery keys, and the audit trails (`audit_logs`, `user_activity_logs`,
+and recovery keys, and the audit trails (`user_activity_logs`,
 `command_audit_logs`, `*_change_audit`). This is a disaster-recovery copy,
 so it does not follow the in-app backup's table selection, which leaves
 secrets out on purpose (see [DECISIONS.md](DECISIONS.md) #35).

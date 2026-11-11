@@ -31,8 +31,8 @@ BACKUP_DB_FILE_LEGACY="database.sql"
 # with pg_dump-style * wildcards. Their definitions are still dumped, so a
 # restore recreates them empty. Everything here is logs, telemetry or state
 # the application rebuilds on its own - never business data, users, secrets
-# or audit trails (audit_logs, user_activity_logs, *_audit stay in: for a
-# compliance product they are evidence). See docs/DECISIONS.md #35.
+# or audit trails (user_activity_logs, command_audit_logs, *_change_audit stay
+# in: for a compliance product they are evidence). See docs/DECISIONS.md #35, #36.
 #
 # This is deliberately not the application's backup_table_registry: that is
 # the allowlist of the in-app JSONL export, which leaves out auth, vault, MDM
@@ -62,6 +62,12 @@ BACKUP_EXCLUDE_DATA_DEFAULT=(
     'postgres:public.storage_sweep_runs'
     'postgres:public.software_catalog_enrich_runs'
     'postgres:public.integration_sync_runs'
+    # Agent log ingest, despite the name: daily partitions audit_logs_y*m*d*
+    # plus audit_logs_default, which the app itself drops after 7 days. The *
+    # is needed: pg_dump writes each partition's data separately, so leaving
+    # out only the parent would still dump every row (PG15 has no
+    # --exclude-table-data-and-children).
+    'postgres:public.audit_logs*'
 )
 
 # The in-app backups' bucket. Those backups are already copies (to their own
