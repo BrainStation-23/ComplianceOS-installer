@@ -21,6 +21,9 @@
 # publish it to the host - access is meant to go through the API gateway.
 LOGFLARE_PORT="4000"
 
+# The upstream compose overlay that adds the analytics and vector services.
+LOGFLARE_OVERLAY="docker-compose.logs.yml"
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -90,6 +93,29 @@ logflare_configure_supabase() {
 # True when upstream ships the mechanism to enable analytics.
 logflare_overlay_available() {
     [[ -f "${SUPABASE_DIR}/run.sh" ]]
+}
+
+# True when the logs overlay is listed in COMPOSE_FILE, i.e. Compose will
+# start analytics and vector.
+logflare_overlay_registered() {
+    local current
+    current="$(env_get "${SUPABASE_DIR}/.env" COMPOSE_FILE 2>/dev/null || true)"
+    [[ ":${current}:" == *":${LOGFLARE_OVERLAY}:"* ]]
+}
+
+# Take the logs overlay out of COMPOSE_FILE. upstream's run.sh is the
+# mechanism that put it there, so it gets the first go; the overlay is then
+# removed directly if it is still listed, so the result never depends on what
+# a given upstream release's run.sh happens to do. Other overlays keep their
+# place either way.
+logflare_remove_overlay() {
+    if logflare_overlay_available && logflare_overlay_registered; then
+        run_logged "run.sh config remove logs" bash -c \
+            "cd '$SUPABASE_DIR' && sh run.sh config remove logs" || \
+            log_warn "run.sh could not remove the logs overlay; removing it directly."
+    fi
+    compose_file_register "${SUPABASE_DIR}/.env" "$LOGFLARE_OVERLAY" false
+    ! logflare_overlay_registered
 }
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@
 #   sentinel-ops remote [status|secondary|offsite]   3-2-1 replication targets
 #   sentinel-ops schedule [status|enable|disable|run-now]
 #   sentinel-ops auth [status|enable|disable] [feature]   auth hardening
+#   sentinel-ops logflare [status|enable|disable]   Supabase Analytics
 #   sentinel-ops repair [check|apply]   validate/fix supabase/.env
 #   sentinel-ops mdm-proxy [status|enable|disable|sync-cert]   Windows MDM port
 #   sentinel-ops nuke               destroy this installation entirely
@@ -49,7 +50,7 @@ for _lib in common os prereqs config supabase logflare azure hardening storage c
     # shellcheck source=/dev/null
     source "${SO_LIB_DIR}/${_lib}.sh"
 done
-for _lib in install update selfupdate autoupdate status cleanup credentials maintenance backup remote schedule nuke network azure auth domain branch repair mdm_proxy; do
+for _lib in install update selfupdate autoupdate status cleanup credentials maintenance backup remote schedule nuke network azure auth domain branch repair mdm_proxy logflare; do
     # shellcheck source=/dev/null
     source "${SO_LIB_DIR}/commands/${_lib}.sh"
 done
@@ -119,6 +120,9 @@ Commands:
                           Optional Supabase Auth hardening (signup,
                           password-policy, hibp, captcha, rate-limit) - see
                           docs/AUTH-HARDENING.md
+  logflare [status|enable|disable]
+                          Turn Supabase Analytics (Logflare + vector) on or
+                          off; collected logs are kept - see docs/LOGFLARE.md
   repair [check|apply]    Validate supabase/.env for known mechanical
                           mistakes (CRLF, stray whitespace, duplicate keys, a
                           trailing slash on a URL); apply fixes and restart
@@ -169,7 +173,16 @@ main() {
             --debug)    SO_DEBUG="true"; shift ;;
             -h|--help)  usage; return 0 ;;
             --)         shift; args+=("$@"); break ;;
-            -*)         log_error "Unknown option: $1"; usage; return 2 ;;
+            -*)
+                # Once the command is known, an option this parser does not
+                # own is the command's own (cleanup --dry-run, restore
+                # --scope=db, nuke --keep-backups, ...).
+                if (( ${#args[@]} )); then
+                    args+=("$1"); shift
+                else
+                    log_error "Unknown option: $1"; usage; return 2
+                fi
+                ;;
             *)          args+=("$1"); shift ;;
         esac
     done
@@ -206,6 +219,7 @@ main() {
         branch)      cmd_branch "${rest[@]:-status}" ;;
         azure)       cmd_azure "${rest[@]:-status}" ;;
         auth)        cmd_auth "${rest[@]:-status}" ;;
+        logflare|analytics) cmd_logflare "${rest[@]:-status}" ;;
         repair)      cmd_repair "${rest[@]:-check}" ;;
         mdm-proxy)   cmd_mdm_proxy "${rest[@]:-status}" ;;
         nuke)        cmd_nuke "${rest[@]:-}" ;;

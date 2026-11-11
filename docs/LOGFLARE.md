@@ -118,16 +118,40 @@ health check allows 180 seconds.
 > restricted at the network level. Do not publish port 4000 and do not proxy it
 > to the internet. The installer prints this warning after every deployment.
 
-## Disabling it
+## Turning it on or off
 
-Answer *no* at install time, or set `ENABLE_LOGFLARE=false` in
-`config/installer.env`. The phase is skipped and `status` reports it disabled.
-
-To turn it off on a running installation:
+Answer *no* at install time to skip the phase. On a running installation:
 
 ```bash
-cd /opt/sentinel-ops/supabase && sh run.sh config remove logs && sh run.sh start
+sudo sentinel-ops logflare status    # configuration vs. what Compose runs
+sudo sentinel-ops logflare disable
+sudo sentinel-ops logflare enable
 ```
+
+`disable`:
+
+1. sets `ENABLE_LOGFLARE=false` in `config/installer.env`, so `status` reports
+   it disabled and `update supabase` stops re-applying and health-checking it;
+2. removes `docker-compose.logs.yml` from `COMPOSE_FILE` (through `run.sh config
+   remove logs`, then directly if it is still listed);
+3. regenerates the container log-limit overlay. It names every service, so
+   left alone it would still define `analytics` and `vector` without an image
+   and Compose would refuse to start the stack;
+4. runs `up -d --remove-orphans`, which removes the `analytics` and `vector`
+   containers. A plain `run.sh start` / `up -d` would leave them running.
+
+Nothing else is removed. The logs already collected stay in the `_analytics`
+schema of the `_supabase` database (backups already exclude them), and the
+`LOGFLARE_*` secrets stay in `supabase/.env`, so `enable` picks up where it
+left off. Studio's Logs pages are empty while it is off. To reclaim the space
+for good:
+
+```bash
+cd /opt/sentinel-ops/supabase
+docker compose exec db psql -U postgres -d _supabase -c 'DROP SCHEMA _analytics CASCADE;'
+```
+
+`enable` needs the Supabase release's `run.sh`, exactly like the install phase.
 
 ## Troubleshooting
 
