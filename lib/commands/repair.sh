@@ -21,6 +21,15 @@ _repair_check() {
         done <<<"$issues"
         printf '\nRun `sentinel-ops repair apply` to fix these and restart the affected services.\n'
     fi
+
+    # An update killed while migrating leaves its background jobs paused (#33).
+    section "Background jobs"
+    if [[ -s "$(_cron_paused_file)" ]]; then
+        status_line "Status" "warn" "Paused by an interrupted update (job ids: $(_cron_paused_ids))"
+        printf '\nRun `sentinel-ops repair apply` (or the next update) to resume them.\n'
+    else
+        status_line "Status" "ok" "None left paused by an update"
+    fi
     _repair_check_storage
     _repair_check_container_logs
     _repair_check_database
@@ -66,6 +75,11 @@ _repair_check_database() {
 _repair_apply() {
     local env_file="${SUPABASE_DIR}/.env"
     local changed="false"
+
+    # Background jobs an interrupted update left paused (#33).
+    if [[ -s "$(_cron_paused_file)" ]]; then
+        cron_jobs_resume_paused || log_warn "Background jobs are still paused; is the database running?"
+    fi
 
     if env_repair_file "$env_file"; then
         changed="true"

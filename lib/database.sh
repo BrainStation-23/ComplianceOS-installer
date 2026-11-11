@@ -33,7 +33,10 @@ _db_psql_as() {
     local user="$1"; shift
     local cid
     cid="$(_db_container)" || return 1
-    docker exec -i -e PGPASSWORD="$(_db_pass)" "$cid" \
+    # SO_DB_PGOPTIONS sets session settings (e.g. -c lock_timeout=15s)
+    # without adding lines to the SQL, so psql's line numbers still match the
+    # migration file.
+    docker exec -i -e PGPASSWORD="$(_db_pass)" ${SO_DB_PGOPTIONS:+-e "PGOPTIONS=${SO_DB_PGOPTIONS}"} "$cid" \
         psql -U "$user" -d "$(_db_name)" -v ON_ERROR_STOP=1 "$@"
 }
 
@@ -182,9 +185,9 @@ _migration_hint() {
         22*)
             printf '%s' "A value does not fit its type (format, length or range). In an ALTER COLUMN ... TYPE or a backfill this is usually existing data." ;;
         55P03|57014)
-            printf '%s' "Timed out waiting for a lock or for the statement: something else (usually the running application) holds the table. Retry, or run the update with the application stopped." ;;
+            printf '%s' "Timed out waiting for a lock or for the statement: another session held the table through every retry (see 'waiting on' above). Background jobs were paused and are resumed; wait for that session to finish, or stop it, and run the update again. SO_MIGRATION_LOCK_TIMEOUT and SO_MIGRATION_LOCK_RETRIES allow longer waits." ;;
         40P01)
-            printf '%s' "Deadlock with another session. Retrying usually succeeds." ;;
+            printf '%s' "Deadlock with another session on every retry. Wait for the other session (see 'waiting on' above) and run the update again." ;;
         0A000)
             printf '%s' "Feature not supported here - often an extension or command the self-hosted image does not provide." ;;
         25*)
@@ -302,11 +305,188 @@ _migration_report_failure() {
     return 0
 }
 
+# ---------------------------------------------------------------------------
+# Background jobs and locks while migrating (#33)
+#
+# The application's pg_cron jobs keep writing while migrations run: the
+# agent-ingest drains every minute, in one transaction of up to ~30 s per
+# batch, plus the 1-minute summary jobs. A migration that needs a strong lock
+# (CREATE POLICY, ALTER TABLE, an index build) on one of their tables waits
+# for them, and every later query on that table - console reads, agent writes,
+# the next drain - queues behind it. So:
+#
+#   * every active job is paused for the migrations and resumed afterwards.
+#     Agents keep sending; their messages wait in pgmq and drain on resume.
+#     The paused job ids are written to a state file first, so a run that is
+#     killed half-way is undone by the next update (or `repair apply`);
+#   * each migration runs with a lock_timeout, and one that times out on a
+#     lock (or loses a deadlock) is rolled back and retried with backoff;
+#   * whoever held the lock is named.
+# ---------------------------------------------------------------------------
+
+SO_MIGRATION_LOCK_TIMEOUT="${SO_MIGRATION_LOCK_TIMEOUT:-15s}"
+SO_MIGRATION_LOCK_RETRIES="${SO_MIGRATION_LOCK_RETRIES:-5}"
+SO_MIGRATION_RETRY_DELAY="${SO_MIGRATION_RETRY_DELAY:-5}"    # seconds, doubled per retry
+SO_MIGRATION_JOB_WAIT="${SO_MIGRATION_JOB_WAIT:-120}"        # seconds
+
+_cron_paused_file() { printf '%s/migrations-paused-cron-jobs' "${STATE_DIR:-${INSTALL_DIR:-/opt/sentinel-ops}/.state}"; }
+
+# Run a single query as the superuser and print the bare result. cron.job
+# belongs to supabase_admin, not to the migration role.
+_db_query_superuser() {
+    printf '%s' "$1" | db_psql_superuser -tAq 2>/dev/null
+}
+
+_cron_available() {
+    [[ "$(_db_query_superuser "SELECT to_regclass('cron.job') IS NOT NULL;")" == "t" ]]
+}
+
+# Comma-separated job ids from the state file; nothing when absent or empty.
+_cron_paused_ids() {
+    local file
+    file="$(_cron_paused_file)"
+    [[ -s "$file" ]] || return 0
+    grep -E '^[0-9]+$' "$file" | paste -sd, -
+}
+
+# Resume the jobs a migration run paused. Safe to call at any time: without a
+# state file it does nothing. Jobs deleted in the meantime are skipped.
+cron_jobs_resume_paused() {
+    local file ids n
+    file="$(_cron_paused_file)"
+    [[ -e "$file" ]] || return 0
+    ids="$(_cron_paused_ids)"
+    if [[ -z "$ids" ]]; then
+        rm -f "$file"
+        return 0
+    fi
+    if ! n="$(_db_query_superuser "SELECT count(cron.alter_job(jobid, active := true)) FROM cron.job WHERE jobid IN (${ids});")" \
+        || [[ -z "$n" ]]; then
+        log_warn "Could not resume the background jobs paused for migrations (ids ${ids}). They stay paused; run \`sentinel-ops repair apply\` to resume them."
+        return 1
+    fi
+    rm -f "$file"
+    log_ok "Resumed ${n} background job(s)"
+    return 0
+}
+
+# Job runs still in progress, one per line: "<jobname>|<pid>|<seconds>".
+_cron_running_jobs() {
+    _db_query_superuser "SELECT j.jobname, d.job_pid, extract(epoch FROM now() - d.start_time)::int
+                           FROM cron.job_run_details d
+                           JOIN cron.job j ON j.jobid = d.jobid
+                           JOIN pg_stat_activity a ON a.pid = d.job_pid
+                          WHERE d.status = 'running'
+                          ORDER BY d.start_time;"
+}
+
+# Pause every active pg_cron job, then wait (bounded) for runs in progress.
+# Returns non-zero only when jobs could not be paused; migrations then run as
+# before, with the lock timeout and retries still in place.
+cron_jobs_pause_for_migrations() {
+    # A killed earlier run left its jobs paused: put them back first, so they
+    # are recorded as active again below.
+    cron_jobs_resume_paused || return 1
+    _cron_available || return 0
+
+    local ids file n
+    ids="$(_db_query_superuser "SELECT jobid FROM cron.job WHERE active ORDER BY jobid;")" || {
+        log_warn "Could not read the background jobs; migrating with them running."
+        return 1
+    }
+    [[ -n "$ids" ]] || return 0
+
+    file="$(_cron_paused_file)"
+    mkdir -p "$(dirname "$file")" 2>/dev/null || true
+    # Written before pausing: if this run dies after the update below, the
+    # next one knows what to resume.
+    if ! printf '%s\n' "$ids" >"$file"; then
+        log_warn "Could not write ${file}; migrating with background jobs running."
+        return 1
+    fi
+    if ! n="$(_db_query_superuser "SELECT count(cron.alter_job(jobid, active := false)) FROM cron.job WHERE jobid IN ($(_cron_paused_ids));")" \
+        || [[ -z "$n" ]]; then
+        rm -f "$file"
+        log_warn "Could not pause the background jobs; migrating with them running."
+        return 1
+    fi
+    log_info "Paused ${n} background job(s) while migrating"
+
+    # pg_cron does not stop a run in progress. Wait for it, within a limit:
+    # past it, the lock timeout below keeps a migration from queueing forever.
+    local waited=0 running
+    while :; do
+        running="$(_cron_running_jobs)" || running=""
+        [[ -z "$running" ]] && break
+        if (( waited >= SO_MIGRATION_JOB_WAIT )); then
+            log_warn "Background jobs still running after ${SO_MIGRATION_JOB_WAIT}s; migrating anyway:"
+            _cron_print_running "$running"
+            break
+        fi
+        if (( waited == 0 )); then
+            log_info "Waiting for running background jobs to finish:"
+            _cron_print_running "$running"
+        fi
+        sleep 2
+        waited=$(( waited + 2 ))
+    done
+    return 0
+}
+
+_cron_print_running() {
+    local name pid secs
+    while IFS='|' read -r name pid secs; do
+        [[ -n "$name" ]] && log_info "    ${name} (pid ${pid}, running ${secs}s)"
+    done <<<"$1"
+}
+
+# The SQLSTATE of the first error in a psql output file (run with
+# VERBOSITY=verbose), or nothing.
+_migration_sqlstate() {
+    grep -m1 -oE 'ERROR:  [0-9A-Z]{5}:' "$1" 2>/dev/null | sed -E 's/ERROR:  ([0-9A-Z]{5}):/\1/'
+}
+
+# Sessions in a transaction that hold locks on tables, oldest first: after a
+# lock timeout the migration's own transaction is gone, so pg_blocking_pids()
+# can't name the blocker any more, but the session that held the lock usually
+# still does. Names the pg_cron job when the session is one.
+_migration_report_blockers() {
+    local cron_join="" cron_name="NULL"
+    if _cron_available; then
+        cron_join="LEFT JOIN cron.job_run_details d ON d.job_pid = a.pid AND d.status = 'running'
+                    LEFT JOIN cron.job j ON j.jobid = d.jobid"
+        cron_name="'pg_cron: ' || j.jobname"
+    fi
+    local rows
+    rows="$(_db_query_superuser "SELECT a.pid,
+                                        coalesce(${cron_name}, nullif(a.application_name, ''), a.backend_type, '?'),
+                                        extract(epoch FROM now() - a.xact_start)::int,
+                                        left(regexp_replace(coalesce(a.query, ''), '\s+', ' ', 'g'), 120)
+                                   FROM pg_stat_activity a
+                                   ${cron_join}
+                                  WHERE a.xact_start IS NOT NULL
+                                    AND a.pid <> pg_backend_pid()
+                                    AND a.datname = current_database()
+                                    AND EXISTS (SELECT 1 FROM pg_locks l
+                                                 WHERE l.pid = a.pid AND l.granted
+                                                   AND l.locktype = 'relation')
+                                  ORDER BY a.xact_start
+                                  LIMIT 5;")" || rows=""
+    if [[ -z "$rows" ]]; then
+        log_warn "    No session holds table locks now; it has finished."
+        return 0
+    fi
+    local pid who secs query
+    while IFS='|' read -r pid who secs query; do
+        [[ -n "$pid" ]] && log_warn "    waiting on pid ${pid} (${who}, ${secs}s): ${query}"
+    done <<<"$rows"
+}
+
 # Apply every pending migration, in filename order.
 #
 # Each migration runs in a single transaction together with the row that
 # records it, so a failed migration leaves neither partial schema changes nor a
-# bogus tracking entry.
+# bogus tracking entry. Background jobs are paused for the duration (#33).
 deploy_migrations() {
     local dir="${APP_DIR}/supabase/migrations"
     [[ -d "$dir" ]] || { log_error "No migrations directory at ${dir}"; return 1; }
@@ -321,6 +501,10 @@ deploy_migrations() {
     # Before the early return below, so an already-current database still gets
     # it. Not fatal: see db_ensure_replication_role_grant.
     db_ensure_replication_role_grant || true
+
+    # Background jobs a killed earlier run left paused, also when nothing is
+    # pending now (#33).
+    cron_jobs_resume_paused || true
 
     local applied_list
     applied_list="$(db_query "SELECT version FROM supabase_migrations.schema_migrations;")" || applied_list=""
@@ -365,29 +549,64 @@ deploy_migrations() {
         return 0
     fi
 
+    cron_jobs_pause_for_migrations || true
     log_info "Applying ${#pending[@]} pending migration(s)..."
-    local count=0 out rc
+    local rc=0
+    _apply_pending_migrations "${pending[@]}" || rc=$?
+    # Whatever happened above. A failure here leaves the state file for the
+    # next update or `repair apply`.
+    cron_jobs_resume_paused || true
+    return "$rc"
+}
+
+# Apply the given migration files in order; stops at the first failure.
+_apply_pending_migrations() {
+    local count=0 out rc f base version attempt sqlstate delay
     out="$(mktemp)"
-    for f in "${pending[@]}"; do
+    for f in "$@"; do
         base="$(basename "$f")"
         version="$(_migration_version "$base")"
         local name
         name="$(_migration_name "$base")"
 
         log_info "  ${base}"
-        # -f - makes psql prefix each message with the input line, -b echoes
-        # the failing statement, and verbose errors carry the SQLSTATE.
-        rc=0
-        {
-            cat "$f"
-            printf '\nINSERT INTO supabase_migrations.schema_migrations (version, name) VALUES (%s%s%s, %s%s%s);\n' \
-                "'" "$(_sql_quote "$version")" "'" "'" "$(_sql_quote "$name")" "'"
-        } | db_psql --single-transaction -q -b -v VERBOSITY=verbose -f - >"$out" 2>&1 || rc=$?
+        attempt=0
+        while :; do
+            # -f - makes psql prefix each message with the input line, -b
+            # echoes the failing statement, and verbose errors carry the
+            # SQLSTATE. A lock wait longer than the timeout fails the
+            # transaction (55P03) instead of queueing everyone behind it.
+            rc=0
+            {
+                cat "$f"
+                printf '\nINSERT INTO supabase_migrations.schema_migrations (version, name) VALUES (%s%s%s, %s%s%s);\n' \
+                    "'" "$(_sql_quote "$version")" "'" "'" "$(_sql_quote "$name")" "'"
+            } | SO_DB_PGOPTIONS="-c lock_timeout=${SO_MIGRATION_LOCK_TIMEOUT}" \
+                db_psql --single-transaction -q -b -v VERBOSITY=verbose -f - >"$out" 2>&1 || rc=$?
 
-        if [[ -s "$out" ]]; then
-            _log_to_file "[DEBUG] psql output for ${base} (exit ${rc}):"
-            [[ -n "$SO_LOG_FILE" ]] && sed 's/^/    /' "$out" 2>/dev/null >>"$SO_LOG_FILE"
-        fi
+            if [[ -s "$out" ]]; then
+                _log_to_file "[DEBUG] psql output for ${base} (exit ${rc}, attempt $(( attempt + 1 ))):"
+                [[ -n "$SO_LOG_FILE" ]] && sed 's/^/    /' "$out" 2>/dev/null >>"$SO_LOG_FILE"
+            fi
+            (( rc == 0 )) && break
+
+            sqlstate="$(_migration_sqlstate "$out")"
+            [[ "$sqlstate" == "55P03" || "$sqlstate" == "40P01" ]] || break
+            if (( attempt >= SO_MIGRATION_LOCK_RETRIES )); then
+                log_error "  Still blocked after ${SO_MIGRATION_LOCK_RETRIES} retries:"
+                _migration_report_blockers
+                break
+            fi
+            attempt=$(( attempt + 1 ))
+            delay=$(( SO_MIGRATION_RETRY_DELAY * (1 << (attempt - 1)) ))
+            if [[ "$sqlstate" == "55P03" ]]; then
+                log_warn "  A lock was not free within ${SO_MIGRATION_LOCK_TIMEOUT}; rolled back, retry ${attempt}/${SO_MIGRATION_LOCK_RETRIES} in ${delay}s"
+            else
+                log_warn "  Deadlock with another session; rolled back, retry ${attempt}/${SO_MIGRATION_LOCK_RETRIES} in ${delay}s"
+            fi
+            _migration_report_blockers
+            sleep "$delay"
+        done
 
         if (( rc != 0 )); then
             _migration_report_failure "$f" "$out" "$rc"
