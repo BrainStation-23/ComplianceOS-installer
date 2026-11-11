@@ -13,7 +13,7 @@ What happens, in order:
 3. Regenerate `app/.env` from the live Supabase configuration
 4. Build the image, tagged `sentinel-ops:<git-sha>`
 5. Back up the database
-6. Apply pending migrations
+6. Apply pending migrations, with background jobs paused (see below)
 7. Deploy edge functions
 8. Verify the new image on a staging container, then swap the live one
 9. Health-check; roll back automatically on failure
@@ -30,6 +30,41 @@ ready:
 ```
 Supabase → migrations → edge functions → frontend image → frontend container
 ```
+
+### Background jobs and locks during migrations
+
+The application's pg_cron jobs keep writing while migrations run: the agent
+ingest drains (`agent-ingest-drain-1m`, `agent-ingest-audit-logs-1m`) handle a
+batch per run in one transaction, which can take tens of seconds. A migration
+that needs a strong lock on one of their tables (a policy, `ALTER TABLE`, an
+index build) used to wait for them, and every later query on that table queued
+behind it: the console stalled and the update looked hung.
+
+Now, when there are pending migrations:
+
+1. Every active pg_cron job is paused, and runs already in progress are given
+   up to `SO_MIGRATION_JOB_WAIT` seconds (120) to finish. Agents keep sending;
+   their data waits in pgmq and is drained after the update.
+2. Each migration runs with `lock_timeout = SO_MIGRATION_LOCK_TIMEOUT` (15s).
+   One that can't get a lock in time, or loses a deadlock, is rolled back and
+   retried up to `SO_MIGRATION_LOCK_RETRIES` times (5), waiting
+   `SO_MIGRATION_RETRY_DELAY` seconds (5) doubled each time. Each retry names
+   the session holding the lock:
+
+   ```
+   [WARN]    A lock was not free within 15s; rolled back, retry 1/5 in 5s
+   [WARN]      waiting on pid 4123 (pg_cron: agent-ingest-drain-1m, 22s): select public._agent_ingest_drain(...)
+   ```
+3. The paused jobs are resumed, whether the migrations succeeded or not. Jobs
+   that were already inactive stay inactive.
+
+The paused job ids are kept in `.state/migrations-paused-cron-jobs` until they
+are resumed. If an update is killed half-way, the next update or
+`sentinel-ops repair apply` resumes them; `sentinel-ops repair check` reports
+them.
+
+The settings are environment variables, e.g.
+`sudo SO_MIGRATION_LOCK_TIMEOUT=60s sentinel-ops update app`.
 
 ## Automatic application updates
 
@@ -322,6 +357,11 @@ constraint, lock timeout). psql's complete output is in the run's log under
      >     4 |     c int
            5 | );
 ```
+
+A migration still blocked after every retry fails with `55P03` (lock timeout)
+or `40P01` (deadlock), and the report names the session that held the lock.
+Wait for it to finish, or stop it, and run the update again. Background jobs
+are resumed either way.
 
 Two migration files with the same version prefix are refused before anything
 runs. Otherwise the second would look already applied and never run.
