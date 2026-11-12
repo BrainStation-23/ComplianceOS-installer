@@ -42,6 +42,14 @@ APP_BIND="127.0.0.1"
 APP_IMAGE_NAME="sentinel-ops"
 APP_CONTAINER_NAME="sentinel-ops-frontend"
 ENABLE_LOGFLARE="true"
+# Where Logflare stores the logs it collects: local, remote (a Postgres URL)
+# or bigquery. The URL and the BigQuery details are secrets or live next to
+# them, so they are only in supabase/.env. See lib/logflare.sh.
+LOGFLARE_BACKEND="local"
+# Collected logs older than this many days are deleted daily; 0 keeps them.
+# Empty - an installation from before the setting existed - is 0. New
+# installs are asked, with 7 offered.
+LOGFLARE_RETENTION_DAYS=""
 # Azure AD (Microsoft Entra ID) sign-in. Non-secret only - the client secret
 # lives solely in supabase/.env, never here. See lib/azure.sh.
 ENABLE_AZURE_AD="false"
@@ -172,7 +180,7 @@ config_load() {
     local key val
     for key in APP_REPOSITORY APP_BRANCH DEPLOY_KEY SUPABASE_PUBLIC_URL \
                API_EXTERNAL_URL SITE_URL APP_PORT APP_BIND APP_IMAGE_NAME \
-               APP_CONTAINER_NAME ENABLE_LOGFLARE \
+               APP_CONTAINER_NAME ENABLE_LOGFLARE LOGFLARE_BACKEND LOGFLARE_RETENTION_DAYS \
                ENABLE_AZURE_AD AZURE_CLIENT_ID AZURE_TENANT_ID \
                AUTH_DISABLE_SIGNUP AUTH_PASSWORD_POLICY AUTH_PASSWORD_MIN_LENGTH \
                AUTH_HIBP_ENABLED AUTH_HIBP_FAIL_CLOSED AUTH_CAPTCHA_ENABLED \
@@ -230,7 +238,9 @@ config_save() {
         printf 'APP_IMAGE_NAME=%s\n'        "$APP_IMAGE_NAME"
         printf 'APP_CONTAINER_NAME=%s\n\n'  "$APP_CONTAINER_NAME"
         printf '# Analytics (Logflare) - see docs/LOGFLARE.md\n'
-        printf 'ENABLE_LOGFLARE=%s\n\n'     "$ENABLE_LOGFLARE"
+        printf 'ENABLE_LOGFLARE=%s\n'       "$ENABLE_LOGFLARE"
+        printf 'LOGFLARE_BACKEND=%s\n'      "$LOGFLARE_BACKEND"
+        printf 'LOGFLARE_RETENTION_DAYS=%s\n\n' "$LOGFLARE_RETENTION_DAYS"
         printf '# Azure AD sign-in - see docs/AZURE-AD.md. The client secret is\n'
         printf '# never written here; it lives only in supabase/.env.\n'
         printf 'ENABLE_AZURE_AD=%s\n'       "$ENABLE_AZURE_AD"

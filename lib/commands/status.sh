@@ -79,6 +79,19 @@ _status_logflare() {
     else
         status_line "Status" "bad" "Not running"
     fi
+    status_line "Log storage" "" "$(logflare_backend)"
+    if [[ "$(logflare_backend)" != "bigquery" ]]; then
+        local days bytes
+        days="$(logflare_retention_days)"
+        if bytes="$(logflare_storage_bytes 2>/dev/null)"; then
+            status_line "Size" "" "$(human_bytes "$bytes")"
+        fi
+        if [[ "$days" == "0" ]]; then
+            status_line "Retention" "warn" "Off (sentinel-ops logflare retention 7)"
+        else
+            status_line "Retention" "ok" "${days} days"
+        fi
+    fi
     return 0
 }
 

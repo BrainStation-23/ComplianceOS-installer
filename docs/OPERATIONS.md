@@ -400,6 +400,8 @@ Edit `/opt/sentinel-ops/config/installer.env`, then apply:
 | `APP_REPOSITORY` | `sentinel-ops update app` |
 | `APP_BIND`, `APP_PORT` | `sentinel-ops update app` |
 | `ENABLE_LOGFLARE` | `sentinel-ops logflare enable` / `disable` (sets it and applies it) |
+| `LOGFLARE_BACKEND` | `sentinel-ops logflare backend <local\|remote\|bigquery>` (asks for the details, checks them, restarts analytics) |
+| `LOGFLARE_RETENTION_DAYS` | `sentinel-ops logflare retention <days\|off>` (installs or removes the daily timer; the timer reads the value each run) |
 | `STORAGE_FILE_SIZE_LIMIT` | `sentinel-ops repair apply` (rewrites the storage overlay and recreates `storage`) |
 | `IMAGE_CLEANUP_ENABLED`, `IMAGE_BUILD_CACHE_MAX_AGE` | Nothing - read by the next update or `sentinel-ops cleanup` |
 

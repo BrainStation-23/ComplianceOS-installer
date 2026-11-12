@@ -18,7 +18,7 @@
 #   sentinel-ops remote [status|secondary|offsite]   3-2-1 replication targets
 #   sentinel-ops schedule [status|enable|disable|run-now]
 #   sentinel-ops auth [status|enable|disable] [feature]   auth hardening
-#   sentinel-ops logflare [status|enable|disable]   Supabase Analytics
+#   sentinel-ops logflare [status|enable|disable|purge|retention|backend]   Supabase Analytics
 #   sentinel-ops repair [check|apply]   validate/fix supabase/.env
 #   sentinel-ops mdm-proxy [status|enable|disable|sync-cert]   Windows MDM port
 #   sentinel-ops nuke               destroy this installation entirely
@@ -123,6 +123,14 @@ Commands:
   logflare [status|enable|disable]
                           Turn Supabase Analytics (Logflare + vector) on or
                           off; collected logs are kept - see docs/LOGFLARE.md
+  logflare purge [--older-than DAYS]
+                          Delete collected logs (all of them, or the older
+                          ones); works while Logflare is disabled too
+  logflare retention [DAYS|off]
+                          Delete logs older than DAYS every day (systemd timer)
+  logflare backend [local|remote|bigquery]
+                          Where logs are stored: this server, a remote
+                          Postgres URL, or Google BigQuery
   repair [check|apply]    Validate supabase/.env for known mechanical
                           mistakes (CRLF, stray whitespace, duplicate keys, a
                           trailing slash on a URL); apply fixes and restart

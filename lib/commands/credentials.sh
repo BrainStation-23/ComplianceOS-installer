@@ -53,6 +53,10 @@ cmd_credentials() {
         section "Logflare"
         _cred_line "Public token"   "$(env_get "$env_file" LOGFLARE_PUBLIC_ACCESS_TOKEN || true)"
         _cred_line "Private token"  "$(env_get "$env_file" LOGFLARE_PRIVATE_ACCESS_TOKEN || true)"
+        case "$(logflare_backend)" in
+            remote)   _cred_line "Remote log DB URL" "$(env_get "$env_file" LOGFLARE_REMOTE_BACKEND_URL || true)" ;;
+            bigquery) _cred_line "BigQuery project"  "$(env_get "$env_file" GOOGLE_PROJECT_ID || true)" ;;
+        esac
     fi
 
     section "Windows MDM (reverse proxy)"

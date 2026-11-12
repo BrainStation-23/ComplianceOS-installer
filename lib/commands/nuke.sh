@@ -245,7 +245,7 @@ _nuke_filesystem() {
 _nuke_timers() {
     have_cmd systemctl || return 0
     local unit
-    for unit in "$SO_AUTOUPDATE_UNIT" "$SO_BACKUP_UNIT" "$SO_MDM_CERT_UNIT"; do
+    for unit in "$SO_AUTOUPDATE_UNIT" "$SO_BACKUP_UNIT" "$SO_MDM_CERT_UNIT" "$SO_LOGFLARE_RETENTION_UNIT"; do
         [[ -f "/etc/systemd/system/${unit}.timer" ]] || continue
         systemctl disable --now "${unit}.timer" >/dev/null 2>&1 || true
         systemctl stop "${unit}.service" >/dev/null 2>&1 || true

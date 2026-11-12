@@ -153,6 +153,9 @@ switches over with a config change and a restart — no reinstall.
 | `sentinel-ops domain [status\|set <hostname>]` | Point the stack at a real domain (config + restart, no reinstall) |
 | `sentinel-ops azure [status\|enable\|disable]` | Configure Azure AD (Microsoft Entra ID) sign-in |
 | `sentinel-ops logflare [status\|enable\|disable]` | Turn Supabase Analytics (Logflare + vector) on or off; collected logs are kept - see [LOGFLARE.md](docs/LOGFLARE.md) |
+| `sentinel-ops logflare purge [--older-than N]` | Delete the logs Logflare has collected (all, or older than N days), enabled or not |
+| `sentinel-ops logflare retention [days\|off]` | Delete collected logs older than N days every day (systemd timer) |
+| `sentinel-ops logflare backend [local\|remote\|bigquery]` | Store the logs on this server, in a remote Postgres, or in BigQuery |
 | `sentinel-ops auth [status\|enable\|disable] <feature>` | Optional Supabase Auth hardening - see [AUTH-HARDENING.md](docs/AUTH-HARDENING.md) |
 | `sentinel-ops mdm-proxy [status\|enable\|disable\|sync-cert]` | Windows MDM check-ins on a port of their own (they need the PC's client certificate, and enrollment on 443 must not be asked for one); its certificate from Zoraxy's files or from Let's Encrypt through Cloudflare DNS (`--cloudflare`) - see [WINDOWS-MDM.md](docs/WINDOWS-MDM.md) |
 | `sentinel-ops repair [check\|apply]` | Validate `supabase/.env` for known mechanical mistakes and fix them; check/apply the backup restore grant, the storage upload limit and the container log limits |
@@ -360,6 +363,12 @@ overlay is the only path: if the Supabase release in use does not ship it,
 analytics is **skipped with a warning** and the install continues. There is no
 parallel compose stack to fall back to, because a log aggregator is not worth a
 second deployment mechanism to keep in sync.
+
+Collected logs go to this server's Postgres by default, to a remote Postgres
+(a `postgres://` URL), or to BigQuery - asked at install time, changed later
+with `sentinel-ops logflare backend`. On Postgres, logs older than
+`LOGFLARE_RETENTION_DAYS` (7 offered at install) are deleted daily, and
+`sentinel-ops logflare purge` clears them on demand.
 
 Tokens and the base64 `LOGFLARE_DB_ENCRYPTION_KEY` are generated once and
 re-applied after every Supabase update. Port 4000 is never published — Logflare's
