@@ -33,7 +33,27 @@ _repair_check() {
     _repair_check_storage
     _repair_check_container_logs
     _repair_check_database
+    _repair_check_db_tuning
     return 0
+}
+
+# Without the overlay, Postgres runs with the image's laptop-sized defaults.
+_repair_check_db_tuning() {
+    section "Database sizing"
+    if ! db_tuning_enabled; then
+        status_line "Sizing" "warn" "Off (DB_TUNING=${DB_TUNING})"
+        return 0
+    fi
+    if ! db_tuning_overlay_registered; then
+        status_line "Sizing" "warn" "Overlay missing; Postgres runs with the image defaults. Run: sentinel-ops repair apply"
+        return 0
+    fi
+    status_line "Overlay" "ok" "$(db_tuning_summary)"
+    if _db_container >/dev/null 2>&1; then
+        db_tuning_status
+    else
+        status_line "Running" "warn" "Database container not running; not checked"
+    fi
 }
 
 # Without the overlay, the Supabase containers' logs grow without limit.
@@ -144,6 +164,20 @@ _repair_apply() {
         log_ok "Re-applied the container log limits ($(container_log_max_files) x $(container_log_max_size) per service)"
     fi
 
+    # An installation that predates the sizing overlay, a reset COMPOSE_FILE or
+    # a resized host. Only Postgres and PostgREST read it; Postgres restarts
+    # once and keeps its data (it is on a volume).
+    local before_tuning restart_db="false"
+    before_tuning="$(_db_tuning_fingerprint)"
+    db_tuning_apply_config >/dev/null || log_warn "The database sizing could not be re-applied."
+    if [[ "$before_tuning" != "$(_db_tuning_fingerprint)" ]]; then
+        restart_db="true"
+        log_ok "Re-applied the database sizing ($(db_tuning_summary))"
+    elif db_tuning_enabled && _db_container >/dev/null 2>&1 && ! db_tuning_live_matches; then
+        # The overlay is right but Postgres never restarted onto it.
+        restart_db="true"
+    fi
+
     # A database grant takes effect immediately; it needs no restart.
     if _db_container >/dev/null 2>&1; then
         db_ensure_replication_role_grant || true
@@ -159,16 +193,26 @@ _repair_apply() {
         else
             log_warn "Supabase is not fully healthy after recreating it; check: sentinel-ops status"
         fi
-    elif [[ "$restart_storage" == "true" ]]; then
-        if storage_restart; then
-            log_ok "Storage restarted with the new upload limit"
-        else
-            log_warn "Could not restart storage automatically; restart Supabase manually: sentinel-ops update supabase"
+    else
+        if [[ "$restart_storage" == "true" ]]; then
+            if storage_restart; then
+                log_ok "Storage restarted with the new upload limit"
+            else
+                log_warn "Could not restart storage automatically; restart Supabase manually: sentinel-ops update supabase"
+            fi
+        fi
+        if [[ "$restart_db" == "true" ]]; then
+            log_info "Recreating Postgres and PostgREST with the new sizing (Postgres restarts once)..."
+            if db_tuning_restart && supabase_health_check 180; then
+                log_ok "Postgres and PostgREST recreated with the new sizing"
+            else
+                log_warn "Supabase is not fully healthy after recreating Postgres; check: sentinel-ops status"
+            fi
         fi
     fi
 
     if [[ "$changed" != "true" ]]; then
-        [[ "$restart_storage" == "true" || "$restart_stack" == "true" ]] || log_info "Nothing to restart."
+        [[ "$restart_storage" == "true" || "$restart_stack" == "true" || "$restart_db" == "true" ]] || log_info "Nothing to restart."
         return 0
     fi
 

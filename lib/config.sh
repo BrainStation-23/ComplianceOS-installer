@@ -114,6 +114,12 @@ LOG_RETENTION_DAYS="30"
 # of at most this size, per container.
 CONTAINER_LOG_MAX_SIZE="50m"
 CONTAINER_LOG_MAX_FILES="3"
+# Postgres and PostgREST sized for the host (lib/tuning.sh). DB_TUNING=off
+# leaves them at the image defaults; the two sizes override what is detected
+# (empty = detect), for a host the database shares with something else.
+DB_TUNING="auto"
+DB_TUNING_MEMORY_MB=""
+DB_TUNING_CPUS=""
 # Scheduled backups (lib/commands/schedule.sh). Off by default; see
 # `sentinel-ops schedule enable`. CHECK_DAY names the day restic's own
 # integrity check runs against configured remotes, not every night's backup.
@@ -194,6 +200,7 @@ config_load() {
                BACKUP_RETENTION_COUNT BACKUP_RETENTION_MAX_GB LOG_RETENTION_DAYS \
                BACKUP_EXCLUDE_DATA BACKUP_INCLUDE_LOG_DATA \
                CONTAINER_LOG_MAX_SIZE CONTAINER_LOG_MAX_FILES \
+               DB_TUNING DB_TUNING_MEMORY_MB DB_TUNING_CPUS \
                BACKUP_SCHEDULE_ENABLED BACKUP_SCHEDULE_CALENDAR BACKUP_SCHEDULE_CHECK_DAY \
                RESTIC_SECONDARY_ENABLED RESTIC_SECONDARY_REPOSITORY \
                RESTIC_SECONDARY_KEEP_DAILY RESTIC_SECONDARY_KEEP_WEEKLY RESTIC_SECONDARY_KEEP_MONTHLY \
@@ -283,6 +290,10 @@ config_save() {
         printf 'LOG_RETENTION_DAYS=%s\n'         "$LOG_RETENTION_DAYS"
         printf 'CONTAINER_LOG_MAX_SIZE=%s\n'     "$CONTAINER_LOG_MAX_SIZE"
         printf 'CONTAINER_LOG_MAX_FILES=%s\n\n'  "$CONTAINER_LOG_MAX_FILES"
+        printf '# Database sizing (auto|off; sizes empty = detect) - see docs/OPERATIONS.md\n'
+        printf 'DB_TUNING=%s\n'            "$DB_TUNING"
+        printf 'DB_TUNING_MEMORY_MB=%s\n'  "$DB_TUNING_MEMORY_MB"
+        printf 'DB_TUNING_CPUS=%s\n\n'     "$DB_TUNING_CPUS"
         printf '# Backups - see docs/BACKUPS.md\n'
         printf 'BACKUP_RETENTION_COUNT=%s\n' "$BACKUP_RETENTION_COUNT"
         printf 'BACKUP_RETENTION_MAX_GB=%s\n' "$BACKUP_RETENTION_MAX_GB"

@@ -46,7 +46,7 @@ SO_ASSETS_DIR="${SO_ROOT}/assets"
 # alongside the installer.
 SO_SOURCE_DIR="$SO_ROOT"
 
-for _lib in common os prereqs config supabase logflare azure hardening storage container_logs firewall repo frontend mdm_proxy images disk database backup restic selfinstall repair menu; do
+for _lib in common os prereqs config supabase logflare azure hardening storage container_logs tuning firewall repo frontend mdm_proxy images disk database backup restic selfinstall repair menu; do
     # shellcheck source=/dev/null
     source "${SO_LIB_DIR}/${_lib}.sh"
 done
