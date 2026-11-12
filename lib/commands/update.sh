@@ -197,6 +197,9 @@ cmd_update_supabase() {
     # Upstream's refreshed docker-compose.yml brings back its 50 MiB storage
     # limit; the overlay that raises it must stay registered.
     storage_apply_config || log_warn "Could not re-apply the storage upload limit."
+    # Upstream may have changed the db command the sizing appends to, and the
+    # host may have been resized. The restart below applies it.
+    db_tuning_apply_config || log_warn "Could not re-apply the database sizing."
     # Upstream may have added or removed services; every one needs its log
     # limited. The restart below applies it.
     container_logs_apply_config || log_warn "Could not re-apply the container log limits."

@@ -61,6 +61,7 @@ _status_supabase() {
     _status_probe "Studio"     supabase_check_studio
     status_line "Migrations" "" "$(migrations_applied_count) applied"
     storage_status
+    supabase_check_postgres && db_tuning_status
     return 0
 }
 

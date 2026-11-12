@@ -25,6 +25,7 @@ _install_supabase_files() {
     fi
     hardening_apply_config || return 1
     storage_apply_config || return 1
+    db_tuning_apply_config || log_warn "Postgres is not sized for this host; re-run: sentinel-ops repair apply"
     container_logs_apply_config || log_warn "Container logs are not size-limited; re-run: sentinel-ops repair apply"
     return 0
 }
@@ -66,6 +67,22 @@ _install_storage_limit() {
     storage_apply_config || return 1
     if [[ "$before" != "$(_storage_fingerprint)" ]] && supabase_service_running storage; then
         storage_restart || return 1
+    fi
+    return 0
+}
+
+# An installation that predates the sizing overlay, or a host whose RAM or
+# cores changed, gets it here. Postgres and PostgREST are recreated only when
+# the overlay changed (or Postgres is still running on older values).
+_install_db_tuning() {
+    local before
+    before="$(_db_tuning_fingerprint)"
+    db_tuning_apply_config || return 1
+    db_tuning_enabled || return 0
+    supabase_check_postgres || return 0
+    if [[ "$before" != "$(_db_tuning_fingerprint)" ]] || ! db_tuning_live_matches; then
+        db_tuning_restart || return 1
+        wait_for 120 5 supabase_check_postgres || return 1
     fi
     return 0
 }
@@ -244,6 +261,10 @@ cmd_install() {
 
     phase_begin "Storage upload limit"
     _install_storage_limit || die "Could not apply the storage upload limit."
+    phase_end
+
+    phase_begin "Database sizing"
+    _install_db_tuning || log_warn "Postgres is not sized for this host; re-run: sentinel-ops repair apply"
     phase_end
 
     phase_begin "Network exposure"

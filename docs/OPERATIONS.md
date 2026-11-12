@@ -168,6 +168,93 @@ restarts, health-checks, and verifies Logflare.
 If the stack does not come back healthy, the failure message names the
 pre-update backup directory.
 
+## Database sizing
+
+Upstream's compose file starts Postgres with the image defaults
+(`shared_buffers` 128 MB, `work_mem` 4 MB, Docker's 64 MB `/dev/shm`) and
+PostgREST with its default pool, whatever the host has. The installer sizes
+both from the host's RAM and cores and writes the result to a generated Compose
+overlay, `supabase/docker-compose.sentinel-db-tuning.yml`, registered in
+`COMPOSE_FILE` like the storage and logging overlays. Postgres gets the values
+as `-c` arguments appended to upstream's own command, which take precedence
+over `postgresql.conf`.
+
+| Setting | Formula | 16 GB / 16 cores |
+|---|---|---|
+| `shared_buffers` | 25% of RAM | 4 GB |
+| `effective_cache_size` | 75% of RAM | 12 GB |
+| `work_mem` | RAM / 512, 4-64 MB | 32 MB |
+| `maintenance_work_mem` | RAM / 16, 64 MB-2 GB | 1 GB |
+| `max_connections` | fixed | 200 |
+| `max_wal_size` / `min_wal_size` | 4 GB / 1 GB from 8 GB of RAM, else 2 GB / default | 4 GB / 1 GB |
+| `checkpoint_completion_target` | fixed | 0.9 |
+| `max_worker_processes` | cores + 8 (pg_cron, pg_net, replication) | 24 |
+| `max_parallel_workers` | cores | 16 |
+| `max_parallel_workers_per_gather`, `max_parallel_maintenance_workers` | cores / 4, 1-4 | 4 |
+| `random_page_cost`, `effective_io_concurrency` | 1.1 and 200, or 4 and 2 when the disk reports itself rotational | 1.1, 200 |
+| `/dev/shm` (`shm_size`) | RAM / 16, 256 MB-2 GB | 1 GB |
+| PostgREST `PGRST_DB_POOL` | cores x 2 + 8, 10-100 | 40 |
+| PostgREST `PGRST_DB_POOL_ACQUISITION_TIMEOUT` | fixed | 5 s |
+
+RAM is `MemTotal` rounded to the nearest GiB, so a 16 GB machine counts as
+16384 MB rather than the ~15.6 GiB the kernel reports.
+
+Settings in `config/installer.env`:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `DB_TUNING` | `auto` | `off` removes the overlay; Postgres goes back to the image defaults |
+| `DB_TUNING_MEMORY_MB` | empty (detect) | Size for this much RAM instead of the whole host, when other heavy workloads share it |
+| `DB_TUNING_CPUS` | empty (detect) | The same for cores |
+
+`install`, `update supabase` and `repair apply` regenerate the overlay from the
+current host. It is rewritten only when a value changes, and only then are the
+`db` and `rest` containers recreated: Postgres restarts once and keeps its data
+(it lives on a volume). After resizing the VM, or on an installation from
+before the overlay existed:
+
+```bash
+sudo sentinel-ops self-update
+sudo sentinel-ops repair apply     # writes the overlay, recreates db and rest
+```
+
+Check it:
+
+```bash
+sudo sentinel-ops repair check     # overlay values, and whether Postgres runs with them
+sudo sentinel-ops status           # shared_buffers and work_mem as the database reports them
+docker exec supabase-db psql -U postgres -c 'SHOW shared_buffers;' -c 'SHOW work_mem;'
+docker logs supabase-rest 2>&1 | grep -i pool
+```
+
+`status` warns when the running value differs from the overlay, which means
+Postgres has not restarted since the overlay changed.
+
+PostgREST stays connected to Postgres directly, not through the pooler's
+transaction port. It already pools its own connections, and through a
+transaction-mode pooler it would lose prepared statements and the
+`LISTEN pgrst` channel that reloads its schema cache after a migration.
+
+### Not set here
+
+Two settings belong to the application's migrations, not the installer,
+because they are per role or per table and have to exist on every deployment:
+
+- **Timeouts for the agent role**, e.g. `ALTER ROLE authenticated SET
+  lock_timeout = '5s'` and a `statement_timeout`, so a blocked agent call fails
+  fast instead of holding a PostgREST connection.
+- **Autovacuum on tables with constant churn** (the pgmq queue tables and the
+  `audit_logs` partitions), e.g. `ALTER TABLE ... SET
+  (autovacuum_vacuum_scale_factor = 0.01)`, so they are vacuumed after 1% of
+  their rows change instead of the default 20%.
+
+Check what a deployment has with:
+
+```sql
+SELECT rolname, rolconfig FROM pg_roles WHERE rolconfig IS NOT NULL;
+SELECT relname, reloptions FROM pg_class WHERE reloptions IS NOT NULL;
+```
+
 ## Backups
 
 ```bash
@@ -403,6 +490,7 @@ Edit `/opt/sentinel-ops/config/installer.env`, then apply:
 | `LOGFLARE_BACKEND` | `sentinel-ops logflare backend <local\|remote\|bigquery>` (asks for the details, checks them, restarts analytics) |
 | `LOGFLARE_RETENTION_DAYS` | `sentinel-ops logflare retention <days\|off>` (installs or removes the daily timer; the timer reads the value each run) |
 | `STORAGE_FILE_SIZE_LIMIT` | `sentinel-ops repair apply` (rewrites the storage overlay and recreates `storage`) |
+| `DB_TUNING`, `DB_TUNING_MEMORY_MB`, `DB_TUNING_CPUS` | `sentinel-ops repair apply` (rewrites the sizing overlay and recreates `db` and `rest`; see [Database sizing](#database-sizing)) |
 | `IMAGE_CLEANUP_ENABLED`, `IMAGE_BUILD_CACHE_MAX_AGE` | Nothing - read by the next update or `sentinel-ops cleanup` |
 
 Changing a URL requires a **restart**, not a rebuild: the app reads

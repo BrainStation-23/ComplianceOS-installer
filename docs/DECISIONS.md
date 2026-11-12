@@ -1026,3 +1026,62 @@ move.
 The overlay is listed only while upstream's logs overlay is. On its own it
 would define `analytics` without an image, and Compose would refuse to start
 the stack. The container log-limit overlay (34) has the same trap.
+
+---
+
+## 38. Postgres and PostgREST are sized for the host by a generated overlay
+
+Upstream's compose file runs Postgres with the image defaults
+(`shared_buffers` 128 MB, `work_mem` 4 MB, no parallelism tuning) and
+PostgREST with its default pool on any host. On a 16 GB / 16-core server with
+~100 agents, blocked agent calls held PostgREST connections for seconds.
+The lock contention itself is an application fix, but once it is fixed the
+host still runs with laptop-sized settings.
+
+**Where the values go.** A generated overlay,
+`docker-compose.sentinel-db-tuning.yml`, registered in `COMPOSE_FILE` like the
+storage, auth and logging overlays (28, 32, 34), so `update supabase` never
+reverts it. Three alternatives were rejected:
+
+- A `tuning.conf` mounted into the container and included from
+  `postgresql.conf`: the image's `postgresql.conf` is upstream's and is
+  refreshed on update, so the include would need re-patching every time.
+- `ALTER SYSTEM`: it lives in the data directory, is invisible in the
+  deployment files, and needs a running database to apply.
+- `PGRST_DB_POOL` in `supabase/.env`, as first proposed: upstream's compose
+  file does not pass it through to the `rest` container, so it would do
+  nothing. The overlay sets it in `rest`'s environment.
+
+Compose replaces a `command:` list rather than merging it, so the overlay
+holds upstream's command, read from `docker compose config --format json`
+without this overlay, with the `-c` settings appended. Any `-c` upstream sets
+for a parameter we manage is dropped, so re-running never stacks them. If the
+command cannot be read, upstream's long-standing command is used. A `-c` on
+the command line wins over both `postgresql.conf` and `postgresql.auto.conf`.
+
+`shm_size` is raised with the rest: parallel query allocates its shared
+memory in `/dev/shm`, and Docker's 64 MB default fails parallel plans once
+`max_parallel_workers` goes up.
+
+**Formulas, not a lookup table.** Each value scales with RAM or cores and is
+clamped, so a 2 GB test VM and a 256 GB server both get sane values (see the
+table in OPERATIONS.md). RAM is rounded to the nearest GiB so a 16 GB host
+gets exactly 4 GB of `shared_buffers`. `DB_TUNING_MEMORY_MB` and
+`DB_TUNING_CPUS` size for less than the whole host, and `DB_TUNING=off`
+unregisters the overlay.
+
+**Restarts.** The overlay is rewritten only when a value changes, and only
+then are `db` and `rest` recreated (`--no-deps`, so nothing else restarts).
+`repair apply` also recreates them when the overlay is right but the running
+`shared_buffers` differs, which means Postgres never restarted onto it.
+
+**Not done:**
+
+- PostgREST is not moved to the pooler's transaction port. It pools its own
+  connections, and through a transaction-mode pooler it loses prepared
+  statements and the `LISTEN` channel that reloads its schema cache after a
+  migration.
+- Per-role timeouts for the agent role and autovacuum settings on churn
+  tables are per-object settings every deployment needs, so they belong in
+  the application's migrations. OPERATIONS.md documents them and how to check
+  them.
