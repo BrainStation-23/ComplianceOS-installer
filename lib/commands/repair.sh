@@ -120,9 +120,23 @@ _repair_apply() {
         log_ok "Re-applied the storage upload limit ($(human_bytes "$(storage_file_size_limit)"))"
     fi
 
+    # Where Logflare stores its logs: a reset COMPOSE_FILE drops the backend
+    # overlay and silently sends the logs back to this server. Only while
+    # Logflare is on - the overlay cannot be listed without upstream's.
+    local before_backend restart_stack="false"
+    if [[ "$ENABLE_LOGFLARE" == "true" ]] && logflare_overlay_registered; then
+        before_backend="$(env_get "$env_file" COMPOSE_FILE 2>/dev/null || true)|$(cat "$(_logflare_backend_overlay_path)" 2>/dev/null || true)"
+        logflare_apply_backend || log_warn "The Logflare log storage could not be re-applied."
+        if [[ "$before_backend" != "$(env_get "$env_file" COMPOSE_FILE 2>/dev/null || true)|$(cat "$(_logflare_backend_overlay_path)" 2>/dev/null || true)" ]]; then
+            restart_stack="true"
+            log_ok "Re-applied the Logflare log storage ($(logflare_backend))"
+        fi
+    fi
+    logflare_retention_sync >/dev/null || log_warn "The Logflare retention timer could not be installed."
+
     # Logging is part of a container's definition, so it takes recreating the
     # containers - `up -d` recreates only those whose logging changed.
-    local before_logs restart_stack="false"
+    local before_logs
     before_logs="$(_container_logs_fingerprint)"
     container_logs_apply_config >/dev/null || log_warn "The container log limits could not be re-applied."
     if [[ "$before_logs" != "$(_container_logs_fingerprint)" ]]; then

@@ -53,21 +53,101 @@ Docker container stdout/stderr
   Supabase Studio      the Logs views
 ```
 
-## Backend
+## Where the logs are stored
 
-The Postgres backend, which is what the upstream overlay wires up by default.
-`POSTGRES_BACKEND_URL` is supplied by the overlay itself; the installer only
-sets `POSTGRES_BACKEND_SCHEMA` (to `_analytics`) when the overlay has not
-already set it.
+Logflare always runs on this server, and its own small metadata tables (sources,
+settings) always stay in the local `_supabase._analytics` schema. The backend
+decides where the **log tables** go - one `log_events_<source>` table per source,
+which is where all the space is.
 
-Upstream notes that this backend is **not optimised for high-volume inserts or
-heavy querying**, and offers BigQuery as a production alternative. Configuring
-BigQuery is not automated here: it needs a Google Cloud project with billing
-enabled and a service-account key, which is an operator decision rather than
-something an installer should prompt for. To use it, set `GOOGLE_PROJECT_ID`,
-`GOOGLE_PROJECT_NUMBER` and mount `gcloud.json` in `supabase/.env` per the
-upstream reference — those variables are read by the overlay, not by this
-installer, so nothing here fights the change.
+| `LOGFLARE_BACKEND` | Logs stored in | Set up with |
+|---|---|---|
+| `local` (default) | this server's `_supabase` database, schema `_analytics` | nothing - upstream's own wiring |
+| `remote` | the `_analytics` schema of a Postgres on another host | a `postgres://` URL |
+| `bigquery` | Google BigQuery | a GCP project ID, project number and service-account key |
+
+Chosen at install time, and changed later with:
+
+```bash
+sudo sentinel-ops logflare backend            # asks
+sudo sentinel-ops logflare backend remote
+sudo sentinel-ops logflare backend bigquery
+sudo sentinel-ops logflare backend local
+```
+
+Switching checks the new backend first (a remote URL must connect, and the
+`_analytics` schema must exist or be creatable; BigQuery needs Docker Compose
+2.24+), then restarts analytics. **Logs already collected stay where they were**
+and Studio stops showing them. To free that space, purge before switching.
+
+Upstream calls the Postgres backend fine for getting started but **not optimised
+for high-volume inserts**, and recommends BigQuery for production.
+
+### How it is wired
+
+`local` uses upstream's overlay exactly as shipped. For the others the installer
+generates `docker-compose.sentinel-analytics.yml` and lists it in `COMPOSE_FILE`
+**after** `docker-compose.logs.yml`, so it overrides the `analytics` service:
+
+- **remote** sets `POSTGRES_BACKEND_URL: ${LOGFLARE_REMOTE_BACKEND_URL}`. The URL
+  itself is only in `supabase/.env`; the overlay holds no secret.
+- **bigquery** removes `POSTGRES_BACKEND_URL` and `POSTGRES_BACKEND_SCHEMA` with
+  Compose's `!reset` tag, sets `GOOGLE_PROJECT_ID`/`GOOGLE_PROJECT_NUMBER`, and
+  mounts `supabase/gcloud.json` at `/opt/app/rel/logflare/bin/gcloud.json`.
+  Removing matters: Logflare picks BigQuery only when the Postgres URL is
+  **absent** - an empty value still selects Postgres.
+
+The overlay is listed only while upstream's is (it adds to a service upstream's
+overlay defines), and is re-applied by `update supabase` and `repair apply`.
+
+### Remote Postgres
+
+The URL is `postgresql://user:password@host:5432/dbname`, optionally with
+`?sslmode=require`. Percent-encode `$`, quotes and spaces in the password
+(`$` becomes `%24`): Compose would read `$` as a variable. The user must be able
+to create tables in the `_analytics` schema of that database, and to create the
+schema unless it already exists. The connection is made from the database
+container, so the host must be reachable from Docker's network.
+
+### BigQuery
+
+Needs a Google Cloud project with billing enabled, its project ID and project
+number, and a JSON key for a service account with BigQuery access - see the
+[upstream reference](https://supabase.com/docs/reference/self-hosting-analytics/introduction)
+for the exact roles. The installer copies the key to `supabase/gcloud.json`
+(mode 600). Purge and retention do not apply: set a table expiration on the
+dataset in Google Cloud instead.
+
+## Deleting collected logs
+
+```bash
+sudo sentinel-ops logflare purge                    # everything, asks first
+sudo sentinel-ops logflare purge --older-than 30    # only older logs
+sudo sentinel-ops --yes logflare purge              # no question (scripts)
+```
+
+`purge` works whether Logflare is enabled or disabled, on the local or remote
+backend. It only touches the `log_events_*` tables, never Logflare's metadata, so
+`enable` afterwards carries on as before. A full purge truncates, which hands the
+space straight back to the disk. `--older-than` deletes rows and runs a plain
+`VACUUM`, so the space is reused by new logs rather than returned. Purged logs
+cannot be restored: backups already leave them out.
+
+### Retention
+
+```bash
+sudo sentinel-ops logflare retention          # show
+sudo sentinel-ops logflare retention 7        # keep a week
+sudo sentinel-ops logflare retention off
+sudo sentinel-ops logflare prune              # apply it now
+```
+
+The setting is `LOGFLARE_RETENTION_DAYS` in `config/installer.env`. New installs
+are asked, with 7 offered. Installations from before this setting have it empty,
+which means off, so nothing is deleted until someone chooses a number. When set,
+a daily systemd timer (`sentinel-ops-logflare-retention.timer`) runs
+`logflare prune`. It stays while Logflare is disabled, so what was collected
+before still ages out, and it skips a run while an update holds the lock.
 
 ## Variables the installer owns
 
@@ -84,6 +164,8 @@ cannot silently revert them.
 | `LOGFLARE_DB_ENCRYPTION_KEY` | **Base64** key encrypting sensitive Logflare columns. Required in production. |
 | `LOGFLARE_DB_ENCRYPTION_KEY_RETIRED` | Empty except during a key rotation. |
 | `POSTGRES_BACKEND_SCHEMA` | `_analytics`, unless the overlay already set it. |
+| `LOGFLARE_REMOTE_BACKEND_URL` | `remote` backend only: the `postgres://` URL. |
+| `GOOGLE_PROJECT_ID`, `GOOGLE_PROJECT_NUMBER` | `bigquery` backend only. |
 | `DOCKER_SOCKET_LOCATION` | Socket vector mounts to collect container logs. Defaults to `/var/run/docker.sock`; differs under rootless Docker and Podman. |
 
 Both tokens and the encryption key are generated **once**, at installation, and
@@ -140,16 +222,18 @@ sudo sentinel-ops logflare enable
 4. runs `up -d --remove-orphans`, which removes the `analytics` and `vector`
    containers. A plain `run.sh start` / `up -d` would leave them running.
 
-Nothing else is removed. The logs already collected stay in the `_analytics`
-schema of the `_supabase` database (backups already exclude them), and the
-`LOGFLARE_*` secrets stay in `supabase/.env`, so `enable` picks up where it
-left off. Studio's Logs pages are empty while it is off. To reclaim the space
-for good:
+It also takes `docker-compose.sentinel-analytics.yml` out of `COMPOSE_FILE`
+(the file stays; `enable` lists it again).
 
-```bash
-cd /opt/sentinel-ops/supabase
-docker compose exec db psql -U postgres -d _supabase -c 'DROP SCHEMA _analytics CASCADE;'
-```
+Nothing else is removed. The logs already collected stay where they are (backups
+already exclude them), the retention timer keeps ageing them out, and the
+`LOGFLARE_*` secrets stay in `supabase/.env`, so `enable` picks up where it left
+off. Studio's Logs pages are empty while it is off. To reclaim the space now:
+`sudo sentinel-ops logflare purge`.
+
+> Do not `DROP SCHEMA _analytics`. The schema also holds Logflare's own
+> metadata, and is created by Supabase's database init scripts, which only run
+> on a fresh database - so a later `enable` would fail.
 
 `enable` needs the Supabase release's `run.sh`, exactly like the install phase.
 

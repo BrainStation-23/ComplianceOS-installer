@@ -984,3 +984,45 @@ approach as `realtime.messages*`.
 The real audit trails, `user_activity_logs`, `command_audit_logs` and the
 `*_change_audit` tables, stay in. `BACKUP_INCLUDE_LOG_DATA=true` still
 takes everything.
+
+---
+
+## 37. Logflare's logs can be purged, aged out, and stored off the server
+
+Logflare's Postgres backend kept every container log line, forever, in the
+local `_supabase` database. Nothing deleted them, and the documented way to
+reclaim the space was `DROP SCHEMA _analytics CASCADE`. That also drops
+Logflare's metadata, which lives in the same schema. The schema is created by
+Supabase's database init scripts, which only run on a fresh database, so a
+later `logflare enable` would have no schema to start in.
+
+**Purge and retention touch the log tables only.** Logflare's Postgres
+adaptor writes one `log_events_<source token>` table per source, with a
+`timestamp TIMESTAMP` column (UTC, BRIN-indexed). `purge` truncates those
+tables. `--older-than` and retention delete old rows and run a plain
+`VACUUM`, not `VACUUM FULL`, which would lock the table Logflare is writing
+to. When a table has nothing newer than the cutoff, which is the usual case on
+the first run, it is truncated instead. Table names are checked against
+`^log_events_[A-Za-z0-9_]+$` before they go into SQL.
+
+**Retention is off for existing installations.** An empty
+`LOGFLARE_RETENTION_DAYS` counts as 0, so updating the installer deletes
+nothing on its own. New installs are asked, with 7 offered. The timer reads
+the value each time it runs, so changing it never rewrites the units.
+
+**Backends.** Decision 6 called BigQuery an operator decision not to automate.
+It is still opt-in, but now asked at install time alongside a remote Postgres,
+because running out of disk to logs turned out to be the real problem. Both
+leave upstream's compose files untouched. A generated
+`docker-compose.sentinel-analytics.yml`, listed after upstream's
+`docker-compose.logs.yml`, overrides the `analytics` service. In single-tenant
+mode, Logflare (`config/runtime.exs`) selects the Postgres backend whenever
+`POSTGRES_BACKEND_URL` is not nil, and an empty string still counts. So the
+BigQuery overlay removes the variable with Compose's `!reset` tag rather than
+blanking it. That needs Compose 2.24 or later, which is checked before
+switching. Logflare's metadata stays local either way; only the log tables
+move.
+
+The overlay is listed only while upstream's logs overlay is. On its own it
+would define `analytics` without an image, and Compose would refuse to start
+the stack. The container log-limit overlay (34) has the same trap.

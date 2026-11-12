@@ -92,6 +92,7 @@ _install_network() {
 _install_logflare() {
     logflare_install || return 1
     logflare_health_check || return 1
+    logflare_retention_sync || log_warn "Log retention is not scheduled; run 'sentinel-ops logflare prune' yourself."
     return 0
 }
 
