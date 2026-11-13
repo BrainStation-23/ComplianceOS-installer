@@ -14,6 +14,7 @@
 #   sentinel-ops restore [backup] [--scope=db|full] [--from=local|secondary|offsite]
 #   sentinel-ops rollback           previous application image
 #   sentinel-ops cleanup [--dry-run]   remove superseded Docker images
+#   sentinel-ops disk [usage|prune <target...>]   where the disk goes; reclaim it
 #   sentinel-ops logs [target]
 #   sentinel-ops remote [status|secondary|offsite]   3-2-1 replication targets
 #   sentinel-ops schedule [status|enable|disable|run-now]
@@ -44,11 +45,11 @@ SO_ASSETS_DIR="${SO_ROOT}/assets"
 # alongside the installer.
 SO_SOURCE_DIR="$SO_ROOT"
 
-for _lib in common os prereqs config supabase logflare azure hardening storage firewall repo frontend images database backup restic selfinstall repair menu; do
+for _lib in common os prereqs config supabase logflare azure hardening storage firewall repo frontend images disk database backup restic selfinstall repair menu; do
     # shellcheck source=/dev/null
     source "${SO_LIB_DIR}/${_lib}.sh"
 done
-for _lib in install update selfupdate autoupdate status cleanup credentials maintenance backup remote schedule nuke network azure auth domain branch repair; do
+for _lib in install update selfupdate autoupdate status cleanup disk credentials maintenance backup remote schedule nuke network azure auth domain branch repair; do
     # shellcheck source=/dev/null
     source "${SO_LIB_DIR}/commands/${_lib}.sh"
 done
@@ -92,6 +93,12 @@ Commands:
   cleanup [--dry-run]     Remove superseded Docker images (old builds, old
                           Supabase versions, stale build cache); keeps the
                           deployed and rollback images
+  disk [usage]            Break down disk use: this stack (database, Storage,
+                          backups, logs, images, container logs) against
+                          other Docker workloads and the rest of the system
+  disk prune <target...|all> [--dry-run]
+                          Reclaim space: images, logs, backups (= all), or
+                          container-logs (only when named)
   logs [target] [lines]   app | supabase | logflare | installer
   remote [status|secondary|offsite [status|configure|check|forget]]
                           Configure the 3-2-1 replication targets - see
@@ -170,6 +177,7 @@ main() {
         restore)     cmd_restore "${rest[@]:-}" ;;
         rollback)    cmd_rollback ;;
         cleanup)     cmd_cleanup "${rest[@]:-}" ;;
+        disk|du)     cmd_disk "${rest[@]:-usage}" ;;
         logs)        cmd_logs "${rest[@]:-app}" ;;
         remote)      cmd_remote "${rest[@]:-status}" ;;
         schedule)    cmd_schedule "${rest[@]:-status}" ;;

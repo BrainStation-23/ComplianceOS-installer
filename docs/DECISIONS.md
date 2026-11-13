@@ -812,3 +812,38 @@ state, never on a failed or rolled-back one, so the operator still has every
 image to investigate with. A cleanup problem is logged as a warning and never
 fails the update. `IMAGE_CLEANUP_ENABLED=false` turns the automatic step off,
 and `sentinel-ops cleanup [--dry-run]` runs it on demand under the update lock.
+
+## 34. `disk` measures the whole stack against the host, and prunes only what is not data
+
+"The disk is full" had no answer short of running `du` and `docker system df`
+by hand and adding up which parts were ours. `sentinel-ops disk` does that
+sum (`lib/disk.sh`):
+
+- **Ours** is everything under `INSTALL_DIR`, plus in Docker: the application
+  repository's images, the images of the repositories the Supabase compose
+  config names, the writable layers and log files of the compose project's
+  containers and the frontend, and the project's named volumes.
+- **Other Docker** is `docker system df`'s totals minus ours, plus other
+  containers' log files (Docker's totals leave log files out, and they are
+  often the surprise). Build cache is shown with it, because it cannot be
+  attributed to a project.
+- **Rest of the system** is what remains of the filesystem's used space.
+
+Image sizes come from `docker images`, which reports each image whole, so
+builds that share base layers are over-counted. Ours is capped at Docker's
+own image total, and the reclaimable figure for images is labelled "up to".
+
+The database is broken down with `pg_database_size` per database, so
+Logflare's events in `_supabase` show apart from application data, and the
+largest tables are listed. The report reads only; pruning is a separate step
+that the interactive run asks about by number.
+
+Prune targets are the things that are not data: images (the existing
+`lib/images.sh` logic, unchanged), installer logs older than
+`LOG_RETENTION_DAYS`, backups beyond `BACKUP_RETENTION_COUNT`, and container
+logs. The database and Storage are never pruned. Container logs are emptied
+with `truncate`, not removed, because Docker holds the file open and would go
+on writing to a deleted inode; and they are left out of `all`, because they
+are the only record of what a service printed. Log rotation is reported, not
+changed: `daemon.json` is host-wide and needs a Docker restart, which is the
+operator's call on a shared host.

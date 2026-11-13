@@ -146,6 +146,7 @@ switches over with a config change and a restart — no reinstall.
 | `sentinel-ops restore [backup] [--scope\|--from]` | Restore a backup (latest local if omitted) - see [BACKUPS.md](docs/BACKUPS.md) |
 | `sentinel-ops rollback` | Roll the application back to the previous image |
 | `sentinel-ops cleanup [--dry-run]` | Remove superseded Docker images (also done after every update) - see [OPERATIONS.md](docs/OPERATIONS.md#disk-space-and-old-images) |
+| `sentinel-ops disk [prune <target>\|all] [--dry-run]` | Where the disk goes (this stack vs other Docker vs the rest of the system), and reclaim images, old logs, backups or container logs - see [OPERATIONS.md](docs/OPERATIONS.md#where-the-disk-goes) |
 | `sentinel-ops logs <target>` | `app`, `supabase`, `logflare`, `installer` |
 | `sentinel-ops remote [status\|secondary\|offsite]` | Configure the 3-2-1 replication targets - see [BACKUPS.md](docs/BACKUPS.md) |
 | `sentinel-ops schedule [status\|enable\|disable\|run-now]` | Run backups on a systemd timer - see [BACKUPS.md](docs/BACKUPS.md) |

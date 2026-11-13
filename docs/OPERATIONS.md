@@ -151,6 +151,70 @@ offsite one, both replicated by [restic](https://restic.net) on a schedule).
 
 ## Disk space and old images
 
+### Where the disk goes
+
+```bash
+sudo sentinel-ops disk
+```
+
+Measures everything and draws it as bars:
+
+- **Filesystem:** how full it is, and how the used space splits between
+  *Sentinel Ops* (everything this installation owns, files and Docker alike),
+  *other Docker workloads and build cache*, and *the rest of the system*. This
+  answers "is it us?" at a glance.
+- **Sentinel Ops in detail:** database, its write-ahead log, Storage files,
+  local backups, installer logs, edge functions, the application checkout;
+  then in Docker the application and Supabase images (with how many are
+  superseded), each container's log file and whether it is rotated, and
+  container layers.
+- **Inside the database:** size per database, so Logflare's analytics events
+  (database `_supabase`) show up apart from the application's data, and the
+  largest tables, with the known self-growing ones named
+  (`cron.job_run_details`, `auth.audit_log_entries`, ...).
+- **Outside Sentinel Ops:** the systemd journal, `/var/log`, `/tmp` and
+  `/home`, for comparison only.
+- **Can be reclaimed**, numbered. At a terminal you are then asked which to
+  clean up (`1 3`, `a` for all of them, Enter for none).
+
+Measuring runs `du` over the database and Storage, so it takes a while on a
+large installation. It reads only; nothing is removed without asking.
+
+### Reclaiming space
+
+```bash
+sudo sentinel-ops disk prune all --dry-run   # what would go
+sudo sentinel-ops disk prune all             # images, logs, backups
+sudo sentinel-ops disk prune container-logs  # only when named
+```
+
+| Target | Removes | Keeps |
+|---|---|---|
+| `images` | the same as `cleanup` below: old application builds, superseded Supabase images, build cache unused for `IMAGE_BUILD_CACHE_MAX_AGE` | deployed, rollback and `:latest` images; anything a container uses |
+| `logs` | installer logs in `logs/` older than `LOG_RETENTION_DAYS` (default 30) | newer logs, and the log of the run in progress |
+| `backups` | local backups beyond `BACKUP_RETENTION_COUNT` (normally already enforced after each backup) | the newest `BACKUP_RETENTION_COUNT` |
+| `container-logs` | empties the JSON log file of each of this stack's containers | other workloads' containers; the containers themselves |
+
+`all` is `images logs backups`. `container-logs` is not part of it because it
+throws away what the services have printed so far; ask for it by name. Pruning
+takes the update lock, so it never runs alongside an update or a backup.
+
+The database and Storage are never pruned: they are your data. If they are
+what is large, the report tells you which table, and that is a decision for
+the application, not the installer.
+
+If container logs keep coming back, they are not rotated. The report says
+so; set a default in `/etc/docker/daemon.json`, restart Docker and recreate
+the containers, since the setting only applies to new ones
+(`docker compose up -d --force-recreate` in `supabase/`, and
+`sentinel-ops update app` for the frontend):
+
+```json
+{ "log-driver": "json-file", "log-opts": { "max-size": "50m", "max-file": "3" } }
+```
+
+### Old images after updates
+
 Every update leaves images behind: each application build is tagged
 `sentinel-ops:<commit>`, and each Supabase update pulls new versions of a dozen
 service images. With auto-update on, that adds up quickly, so both updates
@@ -281,6 +345,7 @@ Edit `/opt/sentinel-ops/config/installer.env`, then apply:
 | `ENABLE_LOGFLARE` | `sentinel-ops install` (re-runs the analytics phase) |
 | `STORAGE_FILE_SIZE_LIMIT` | `sentinel-ops repair apply` (rewrites the storage overlay and recreates `storage`) |
 | `IMAGE_CLEANUP_ENABLED`, `IMAGE_BUILD_CACHE_MAX_AGE` | Nothing - read by the next update or `sentinel-ops cleanup` |
+| `LOG_RETENTION_DAYS` | Nothing - read by the next `sentinel-ops disk` |
 
 Changing a URL requires a **restart**, not a rebuild: the app reads
 `SUPABASE_URL`/`SUPABASE_PUBLISHABLE_KEY` from `process.env` at runtime via
