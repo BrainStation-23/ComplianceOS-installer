@@ -199,7 +199,7 @@ images_disk_status() {
     local text
     text="$(human_bytes $((avail_kb * 1024))) free (${pct}%) on ${root}${usage:+; images ${usage}}"
     if (( pct < 10 )); then
-        status_line "Disk" "warn" "${text} - see: sentinel-ops cleanup"
+        status_line "Disk" "warn" "${text} - see: sentinel-ops disk"
     else
         status_line "Disk" "ok" "$text"
     fi
