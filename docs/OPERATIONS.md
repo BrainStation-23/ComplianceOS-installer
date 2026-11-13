@@ -303,6 +303,52 @@ sudo sentinel-ops cleanup
 below 10%), how much of the image store is reclaimable, and how much
 `backups/` and `logs/` hold.
 
+### Where the disk goes
+
+```bash
+sudo sentinel-ops disk
+```
+
+Measures everything and draws it as bars:
+
+- **Filesystem:** how full it is, and how the used space splits between
+  *Sentinel Ops* (everything this installation owns, files and Docker alike),
+  *other Docker workloads and build cache*, and *the rest of the system*. This
+  answers "is it us?" at a glance.
+- **Sentinel Ops in detail:** database and its write-ahead log, Storage files,
+  local backups, installer logs, edge functions, the application checkout;
+  then in Docker the application and Supabase images (with how many are
+  superseded), each container's log files with its size limit, and container
+  layers.
+- **Inside the database:** size per database, with Logflare's logs shown
+  under `_supabase` when they are kept on this server, and the largest tables,
+  with the known self-growing ones named (`cron.job_run_details`,
+  `auth.audit_log_entries`, ...).
+- **Outside Sentinel Ops:** the systemd journal, `/var/log`, `/tmp` and
+  `/home`, for comparison only.
+- **Can be reclaimed**, numbered: backups past retention, installer logs past
+  `LOG_RETENTION_DAYS`, superseded images and build cache. At a terminal you
+  are then asked which to reclaim (`1 3`, `a` for all, Enter for none).
+  Below that, the bigger levers that have their own command: Logflare logs
+  over 1 GiB (`logflare purge` / `logflare retention`), containers without a
+  log limit (`repair apply`), and a write-ahead log held back by a
+  replication slot.
+
+Measuring runs `du` over the database and Storage, so it takes a while on a
+large installation. It reads only; nothing is removed without asking.
+
+To reclaim only some of it without the report:
+
+```bash
+sudo sentinel-ops disk prune images logs --dry-run
+sudo sentinel-ops disk prune backups
+sudo sentinel-ops disk prune all     # the same as cleanup
+```
+
+The keep rules are `cleanup`'s, and so is the update lock. The database and
+Storage are never pruned: if they are what is large, the report says which
+table, and that is a decision for the application, not the installer.
+
 ### Container logs
 
 Docker keeps a container's output forever unless told otherwise, and Supabase's

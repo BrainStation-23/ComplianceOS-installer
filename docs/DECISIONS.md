@@ -1085,3 +1085,34 @@ then are `db` and `rest` recreated (`--no-deps`, so nothing else restarts).
   tables are per-object settings every deployment needs, so they belong in
   the application's migrations. OPERATIONS.md documents them and how to check
   them.
+
+## 39. `disk` measures the whole stack against the host, and reclaims through the existing pruners
+
+Every part of the installation has a limit (#34), but when the disk is full
+the operator still has to work out by hand which part is big, and whether
+the growth is this stack at all. `sentinel-ops disk` does that sum
+(`lib/disk_report.sh`):
+
+- **Ours** is everything under `INSTALL_DIR`, plus in Docker: the application
+  repository's images, the images of the repositories the Supabase compose
+  config names, the writable layers and log files (rotated ones included) of
+  the compose project's containers and the frontend, and the project's named
+  volumes.
+- **Other Docker** is `docker system df`'s totals minus ours, plus other
+  containers' log files (Docker's totals leave log files out). Build cache is
+  shown with it, because it cannot be attributed to a project.
+- **Rest of the system** is what remains of the filesystem's used space.
+
+Image sizes come from `docker images`, which reports each image whole, so
+builds that share base layers are over-counted. Ours is capped at Docker's
+own image total, and the reclaimable figure for images is labelled "up to".
+
+The report reads only. Reclaiming calls the functions `cleanup` already uses
+(`backup_prune_local`, `logs_prune_installer`, the image pruners), one target
+at a time, under the update lock, so there is one set of keep rules. What
+`disk` adds is choosing: at a terminal it offers the reclaimable items by
+number, and `disk prune <backups|logs|images>` takes them by name. Logflare's
+logs, unlimited container logs and a held-back write-ahead log are pointed
+at, not acted on: each has its own command (`logflare purge`,
+`repair apply`) or needs a person to look, and the database and Storage are
+never pruned.

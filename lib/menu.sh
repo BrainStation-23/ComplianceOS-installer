@@ -26,7 +26,7 @@ _menu_installed() {
     printf ' 15. Update the installer itself\n'
     printf ' 16. Automatic application updates\n'
     printf ' 17. Application branch (e.g. switch to dev)\n'
-    printf ' 18. Clean up old Docker images\n'
+    printf ' 18. Disk usage and cleanup\n'
     printf ' 19. Destroy this installation (nuke)\n'
     printf ' 20. Exit\n\n'
     printf 'Select: '
@@ -85,7 +85,7 @@ cmd_menu() {
                     IFS= read -r branch_choice || branch_choice=""
                     [[ -n "$branch_choice" ]] && { cmd_branch set "$branch_choice" || true; }
                     ;;
-                18) cmd_cleanup         || true ;;
+                18) cmd_disk usage      || true ;;
                 19) cmd_nuke            || true ;;
                 20|q|quit|exit) return 0 ;;
                 *) log_warn "Invalid selection: ${choice}" ;;

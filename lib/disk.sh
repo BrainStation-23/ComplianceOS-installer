@@ -132,5 +132,5 @@ disk_room_for_update() {
 # Status line for what the installation itself holds on disk.
 disk_install_status() {
     status_line "Installer data" "" \
-        "backups $(human_bytes "$(disk_used_bytes "$BACKUP_DIR")"), logs $(human_bytes "$(disk_used_bytes "$LOG_DIR")") - see: sentinel-ops cleanup"
+        "backups $(human_bytes "$(disk_used_bytes "$BACKUP_DIR")"), logs $(human_bytes "$(disk_used_bytes "$LOG_DIR")") - see: sentinel-ops disk"
 }
