@@ -11,6 +11,7 @@ hardening and disk hygiene.
 **All documentation is in the [wiki](https://github.com/BrainStation-23/ComplianceOS-installer/wiki)**,
 written as a playbook:
 
+- [Setup checklist](https://github.com/BrainStation-23/ComplianceOS-installer/wiki/Setup-Checklist): who provides what (DNS, Cloudflare, network, Entra ID, storage) before you start
 - [Before you install](https://github.com/BrainStation-23/ComplianceOS-installer/wiki/Before-You-Install) and [Install](https://github.com/BrainStation-23/ComplianceOS-installer/wiki/Install)
 - [Go live on a domain](https://github.com/BrainStation-23/ComplianceOS-installer/wiki/Go-Live-on-a-Domain)
 - [Deploy a release](https://github.com/BrainStation-23/ComplianceOS-installer/wiki/Deploy-a-Release), [Backup and restore](https://github.com/BrainStation-23/ComplianceOS-installer/wiki/Backup-and-Restore), [Troubleshooting](https://github.com/BrainStation-23/ComplianceOS-installer/wiki/Troubleshooting)
