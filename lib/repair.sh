@@ -5,7 +5,7 @@
 # Deliberately narrow: it fixes mechanical mistakes (CRLF, stray whitespace
 # around "=", duplicate keys, a trailing slash on a URL) that silently corrupt
 # a value Compose or gotrue read literally - the same class of bug as the
-# Azure redirect URI (docs/AZURE-AD.md, azure_patch_compose() in lib/azure.sh).
+# Azure redirect URI (wiki: Azure-AD-Sign-In, azure_patch_compose() in lib/azure.sh).
 # It never second-guesses a real configuration choice (a custom domain, a
 # disabled provider) - those stay exactly as the operator set them. Restarting
 # the affected containers so a fix actually takes effect is the caller's job;

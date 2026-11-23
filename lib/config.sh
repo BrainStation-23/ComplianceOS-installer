@@ -228,7 +228,7 @@ config_save() {
         # Informational only - always derived from INSTALL_DIR in
         # config_set_paths(), never read back by config_load(). The "second
         # medium" leg of 3-2-1 is RESTIC_SECONDARY_*, not a relocated hot
-        # copy; see docs/DECISIONS.md.
+        # copy; see Design-Decisions #25 in the wiki.
         printf 'BACKUP_DIR=%s\n\n'          "$BACKUP_DIR"
         printf '# Application repository\n'
         printf 'APP_REPOSITORY=%s\n'        "$APP_REPOSITORY"
@@ -244,16 +244,16 @@ config_save() {
         printf 'APP_BIND=%s\n'              "$APP_BIND"
         printf 'APP_IMAGE_NAME=%s\n'        "$APP_IMAGE_NAME"
         printf 'APP_CONTAINER_NAME=%s\n\n'  "$APP_CONTAINER_NAME"
-        printf '# Analytics (Logflare) - see docs/LOGFLARE.md\n'
+        printf '# Analytics (Logflare) - see wiki: Logflare-Analytics\n'
         printf 'ENABLE_LOGFLARE=%s\n'       "$ENABLE_LOGFLARE"
         printf 'LOGFLARE_BACKEND=%s\n'      "$LOGFLARE_BACKEND"
         printf 'LOGFLARE_RETENTION_DAYS=%s\n\n' "$LOGFLARE_RETENTION_DAYS"
-        printf '# Azure AD sign-in - see docs/AZURE-AD.md. The client secret is\n'
+        printf '# Azure AD sign-in - see wiki: Azure-AD-Sign-In. The client secret is\n'
         printf '# never written here; it lives only in supabase/.env.\n'
         printf 'ENABLE_AZURE_AD=%s\n'       "$ENABLE_AZURE_AD"
         printf 'AZURE_CLIENT_ID=%s\n'       "$AZURE_CLIENT_ID"
         printf 'AZURE_TENANT_ID=%s\n\n'     "$AZURE_TENANT_ID"
-        printf '# Auth hardening - see docs/AUTH-HARDENING.md. The Turnstile secret is\n'
+        printf '# Auth hardening - see wiki: Auth-Hardening. The Turnstile secret is\n'
         printf '# never written here; it lives only in supabase/.env.\n'
         printf 'AUTH_DISABLE_SIGNUP=%s\n'      "$AUTH_DISABLE_SIGNUP"
         printf 'AUTH_PASSWORD_POLICY=%s\n'     "$AUTH_PASSWORD_POLICY"
@@ -264,11 +264,11 @@ config_save() {
         printf 'TURNSTILE_SITE_KEY=%s\n'       "$TURNSTILE_SITE_KEY"
         printf 'AUTH_RATE_LIMIT_HEADER=%s\n'   "$AUTH_RATE_LIMIT_HEADER"
         printf 'AUTH_RATE_LIMIT_TOKEN=%s\n\n'  "$AUTH_RATE_LIMIT_TOKEN"
-        printf '# Windows MDM client certificates - see docs/REVERSE-PROXY.md. Empty\n'
+        printf '# Windows MDM client certificates - see wiki: Windows-MDM. Empty\n'
         printf '# uses the app defaults; the proxy secret lives only in supabase/.env.\n'
         printf 'MDM_CLIENT_CERT_HEADER=%s\n'    "$MDM_CLIENT_CERT_HEADER"
         printf 'MDM_PROXY_SECRET_HEADER=%s\n\n' "$MDM_PROXY_SECRET_HEADER"
-        printf '# Windows MDM proxy (sentinel-ops mdm-proxy) - see docs/REVERSE-PROXY.md\n'
+        printf '# Windows MDM proxy (sentinel-ops mdm-proxy) - see wiki: Windows-MDM\n'
         printf 'MDM_PROXY_ENABLED=%s\n'   "$MDM_PROXY_ENABLED"
         printf 'MDM_PROXY_PORT=%s\n'      "$MDM_PROXY_PORT"
         printf 'MDM_PROXY_BIND=%s\n'      "$MDM_PROXY_BIND"
@@ -281,20 +281,20 @@ config_save() {
         printf 'MDM_PROXY_DOMAIN=%s\n'          "$MDM_PROXY_DOMAIN"
         printf 'MDM_PROXY_ACME_EMAIL=%s\n'      "$MDM_PROXY_ACME_EMAIL"
         printf 'MDM_PROXY_CERTBOT_IMAGE=%s\n\n' "$MDM_PROXY_CERTBOT_IMAGE"
-        printf '# Storage upload limit in bytes - see docs/REVERSE-PROXY.md\n'
+        printf '# Storage upload limit in bytes - see wiki: Reverse-Proxy\n'
         printf 'STORAGE_FILE_SIZE_LIMIT=%s\n\n' "$STORAGE_FILE_SIZE_LIMIT"
-        printf '# Docker image cleanup after updates - see docs/OPERATIONS.md\n'
+        printf '# Docker image cleanup after updates - see wiki: Disk-Space\n'
         printf 'IMAGE_CLEANUP_ENABLED=%s\n'     "$IMAGE_CLEANUP_ENABLED"
         printf 'IMAGE_BUILD_CACHE_MAX_AGE=%s\n\n' "$IMAGE_BUILD_CACHE_MAX_AGE"
-        printf '# Disk space - see docs/OPERATIONS.md\n'
+        printf '# Disk space - see wiki: Disk-Space\n'
         printf 'LOG_RETENTION_DAYS=%s\n'         "$LOG_RETENTION_DAYS"
         printf 'CONTAINER_LOG_MAX_SIZE=%s\n'     "$CONTAINER_LOG_MAX_SIZE"
         printf 'CONTAINER_LOG_MAX_FILES=%s\n\n'  "$CONTAINER_LOG_MAX_FILES"
-        printf '# Database sizing (auto|off; sizes empty = detect) - see docs/OPERATIONS.md\n'
+        printf '# Database sizing (auto|off; sizes empty = detect) - see wiki: Database-Sizing\n'
         printf 'DB_TUNING=%s\n'            "$DB_TUNING"
         printf 'DB_TUNING_MEMORY_MB=%s\n'  "$DB_TUNING_MEMORY_MB"
         printf 'DB_TUNING_CPUS=%s\n\n'     "$DB_TUNING_CPUS"
-        printf '# Backups - see docs/BACKUPS.md\n'
+        printf '# Backups - see wiki: Backup-and-Restore\n'
         printf 'BACKUP_RETENTION_COUNT=%s\n' "$BACKUP_RETENTION_COUNT"
         printf 'BACKUP_RETENTION_MAX_GB=%s\n' "$BACKUP_RETENTION_MAX_GB"
         printf 'BACKUP_EXCLUDE_DATA="%s"\n'   "$BACKUP_EXCLUDE_DATA"
@@ -315,7 +315,7 @@ config_save() {
         printf 'RESTIC_OFFSITE_KEEP_DAILY=%s\n'   "$RESTIC_OFFSITE_KEEP_DAILY"
         printf 'RESTIC_OFFSITE_KEEP_WEEKLY=%s\n'  "$RESTIC_OFFSITE_KEEP_WEEKLY"
         printf 'RESTIC_OFFSITE_KEEP_MONTHLY=%s\n\n' "$RESTIC_OFFSITE_KEEP_MONTHLY"
-        printf '# Updates - see docs/OPERATIONS.md\n'
+        printf '# Updates - see wiki: Automatic-Updates\n'
         printf 'AUTO_UPDATE_ENABLED=%s\n'   "$AUTO_UPDATE_ENABLED"
         printf 'AUTO_UPDATE_CALENDAR=%s\n'  "$AUTO_UPDATE_CALENDAR"
         printf 'AUTO_UPDATE_MIN_FREE_GB=%s\n' "$AUTO_UPDATE_MIN_FREE_GB"

@@ -14,7 +14,7 @@
 # Measuring (dr_measure_*) and drawing (dr_render_*) are kept apart: every
 # measurement lands in a DR_* global, so the report can be tested without a
 # Docker daemon or a database. Reclaiming only calls the existing prune
-# functions, with the same keep rules as `cleanup`. See docs/DECISIONS.md #39.
+# functions, with the same keep rules as `cleanup`. See Design-Decisions #39.
 # shellcheck shell=bash
 
 # Every target `disk prune` accepts, in the order `all` runs them.

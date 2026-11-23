@@ -16,7 +16,7 @@
 # the same network to reach the install with zero manual configuration, without
 # also handing it to the public internet. There is still no TLS on either
 # port - moving to a real domain is `sentinel-ops domain set <hostname>`,
-# which puts a proxy in front instead (see docs/REVERSE-PROXY.md).
+# which puts a proxy in front instead (see the wiki page Go-Live-on-a-Domain).
 # shellcheck shell=bash
 
 network_prompt_config() {

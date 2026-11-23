@@ -112,24 +112,24 @@ Commands:
   logs [target] [lines]   app | supabase | logflare | installer
   remote [status|secondary|offsite [status|configure|check|forget]]
                           Configure the 3-2-1 replication targets - see
-                          docs/BACKUPS.md
+                          wiki: Offsite-Backups
   schedule [status|enable|disable|run-now]
-                          Run backups on a systemd timer - see docs/BACKUPS.md
+                          Run backups on a systemd timer - see wiki: Offsite-Backups
   network [status|enable|disable]
                           Expose (or restrict) the frontend and Supabase API
-                          directly on the network - see docs/REVERSE-PROXY.md
+                          directly on the network - see wiki: Go-Live-on-a-Domain
   domain [status|set <hostname>]
                           Point the stack at a real domain (config + restart,
-                          no reinstall) - see docs/REVERSE-PROXY.md
+                          no reinstall) - see wiki: Go-Live-on-a-Domain
   azure [status|enable|disable]
                           Configure Azure AD (Microsoft Entra ID) sign-in
   auth [status|enable <feature>|disable <feature>]
                           Optional Supabase Auth hardening (signup,
                           password-policy, hibp, captcha, rate-limit) - see
-                          docs/AUTH-HARDENING.md
+                          wiki: Auth-Hardening
   logflare [status|enable|disable]
                           Turn Supabase Analytics (Logflare + vector) on or
-                          off; collected logs are kept - see docs/LOGFLARE.md
+                          off; collected logs are kept - see wiki: Logflare-Analytics
   logflare purge [--older-than DAYS]
                           Delete collected logs (all of them, or the older
                           ones); works while Logflare is disabled too
@@ -148,7 +148,7 @@ Commands:
                           not ask for one).
                           --cloudflare: Let's Encrypt through Cloudflare DNS,
                           issued and renewed here (token: CLOUDFLARE_API_TOKEN
-                          or asked) - see docs/WINDOWS-MDM.md
+                          or asked) - see wiki: Windows-MDM
   nuke [--keep-*]         Destroy this installation (containers, volumes,
                           database and files) so a fresh install can be tested
   version                 Print the installer version
@@ -162,6 +162,9 @@ Options:
   -h, --help              This help
 
 With no command, an interactive menu is shown.
+
+Documentation (the "wiki: <Page>" references above):
+  https://github.com/BrainStation-23/ComplianceOS-installer/wiki
 USAGE
 }
 

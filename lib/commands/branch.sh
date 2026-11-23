@@ -79,7 +79,7 @@ _branch_set() {
             log_warn "${branch} does not contain the deployed commit ${deployed_commit:0:7}."
             log_warn "Migrations already applied from $(state_get APP_BRANCH "the current branch") stay applied - the"
             log_warn "database is not rolled back. If ${branch} cannot run against that schema, restore"
-            log_warn "a backup taken while ${branch} was deployed instead (see docs/BACKUPS.md)."
+            log_warn "a backup taken while ${branch} was deployed instead (see https://github.com/BrainStation-23/ComplianceOS-installer/wiki/Backup-and-Restore)."
             if [[ "$SO_ASSUME_YES" != "true" ]]; then
                 confirm "Switch to ${branch} anyway?" n || { log_info "Cancelled. Nothing was changed."; return 0; }
             fi

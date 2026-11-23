@@ -7,7 +7,7 @@
 # that restic (lib/restic.sh) can back up exactly that directory for the
 # offsite/secondary copies, and a restic-sourced restore reproduces the
 # identical shape a local restore already reads - one restore implementation
-# regardless of source. See docs/BACKUPS.md.
+# regardless of source. See the wiki page Backup-and-Restore.
 # shellcheck shell=bash
 
 # ---------------------------------------------------------------------------
@@ -32,14 +32,14 @@ BACKUP_DB_FILE_LEGACY="database.sql"
 # restore recreates them empty. Everything here is logs, telemetry or state
 # the application rebuilds on its own - never business data, users, secrets
 # or audit trails (user_activity_logs, command_audit_logs, *_change_audit stay
-# in: for a compliance product they are evidence). See docs/DECISIONS.md #35, #36.
+# in: for a compliance product they are evidence). See Design-Decisions #35, #36.
 #
 # This is deliberately not the application's backup_table_registry: that is
 # the allowlist of the in-app JSONL export, which leaves out auth, vault, MDM
 # CAs and recovery keys for security reasons - exactly what a disaster
 # recovery copy must have.
 BACKUP_EXCLUDE_DATA_DEFAULT=(
-    # Logflare's log store (docs/LOGFLARE.md): every container's log lines.
+    # Logflare's log store (wiki: Logflare-Analytics): every container's log lines.
     '_supabase:_analytics.*'
     # Supabase housekeeping that grows without bound.
     'postgres:auth.audit_log_entries'
@@ -83,7 +83,7 @@ BACKUP_STORAGE_EXCLUDE_BUCKETS=(backups)
 # A "db" backup leaves Storage out. It is what runs before every application
 # update: those only change the database, functions and frontend, and Storage
 # holds installer binaries of up to 4 GiB each - copying all of it again on
-# every (unattended) update is what filled disks. See docs/DECISIONS.md #34.
+# every (unattended) update is what filled disks. See Design-Decisions #34.
 backup_create() {
     local label="${1:-manual}" scope="${2:-full}"
     local cid stamp dir

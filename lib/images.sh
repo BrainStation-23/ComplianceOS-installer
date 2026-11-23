@@ -16,7 +16,7 @@
 # and anything a container - running or stopped - still uses. Nothing outside
 # those repositories is touched: this host may run other workloads (a Zoraxy
 # container, say), so there is no `docker system prune` and no
-# `image prune -a` here. See docs/DECISIONS.md #33.
+# `image prune -a` here. See Design-Decisions #33.
 # shellcheck shell=bash
 
 # Non-secret config, persisted in installer.env.

@@ -3,7 +3,7 @@
 # pure string logic, asserted with zero systemd/date involvement. The
 # install/enable/disable/run-cycle functions that actually touch systemctl
 # or shell out to backup_create_full/restic are not tested here - see
-# docs/BACKUPS.md's manual verification steps.
+# the wiki page Offsite-Backups.
 set -uo pipefail
 
 ROOT="${1:-$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"

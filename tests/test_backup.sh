@@ -2,7 +2,7 @@
 # Exercise the local backup logic in isolation from Docker: retention,
 # checksums, metadata and listing. backup_create() itself (which shells out
 # to `docker exec` for pg_dumpall) is Docker-invoking and not tested here
-# - see the manual verification steps in docs/BACKUPS.md - but everything it
+# - see the restore rehearsal in the wiki page Backup-and-Restore - but everything it
 # delegates to for retention, free space, archiving, integrity and listing is
 # asserted directly, the same split _domain_apply_settings/_domain_set use.
 set -uo pipefail

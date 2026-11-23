@@ -9,7 +9,7 @@
 # and any installer over 50 MiB is refused.
 #
 # The override is a generated Compose overlay registered in COMPOSE_FILE, the
-# same mechanism as the auth hardening overlay (docs/DECISIONS.md #28, #32):
+# same mechanism as the auth hardening overlay (Design-Decisions #28, #32):
 # `update supabase` re-syncs docker-compose.yml from upstream, but never ships
 # a file by this name, so the override survives it.
 #
@@ -190,7 +190,7 @@ storage_proxy_status() {
     code="$(storage_proxy_body_code "$SUPABASE_PUBLIC_URL")"
     case "$code" in
         413)
-            status_line "Proxy uploads" "bad" "The reverse proxy refuses a 6 MiB upload chunk (413) - see docs/REVERSE-PROXY.md" ;;
+            status_line "Proxy uploads" "bad" "The reverse proxy refuses a 6 MiB upload chunk (413) - see https://github.com/BrainStation-23/ComplianceOS-installer/wiki/Reverse-Proxy" ;;
         000)
             status_line "Proxy uploads" "warn" "${SUPABASE_PUBLIC_URL} not reachable from this host; not checked" ;;
         *)

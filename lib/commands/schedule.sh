@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # lib/commands/schedule.sh - a systemd timer that runs the full backup cycle:
 # local full-stack backup, replicate to secondary/offsite if configured,
-# apply retention, verify. See docs/BACKUPS.md.
+# apply retention, verify. See the wiki page Offsite-Backups.
 #
 # Tolerates hosts without systemd (warns, returns non-fatal) - the same
 # contract service_enable_start() already has (lib/os.sh) - so a

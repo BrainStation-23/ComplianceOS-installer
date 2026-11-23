@@ -2,7 +2,7 @@
 # lib/commands/mdm_proxy.sh - sentinel-ops mdm-proxy (#18, #25): a port of its
 # own for Windows MDM check-ins, which need the PC's client certificate while
 # enrollment on 443 must not be asked for one. See lib/mdm_proxy.sh and
-# docs/REVERSE-PROXY.md.
+# the wiki page Windows-MDM.
 #
 #   sentinel-ops mdm-proxy status
 #   sentinel-ops mdm-proxy enable [--port N] [--cert FILE] [--key FILE]

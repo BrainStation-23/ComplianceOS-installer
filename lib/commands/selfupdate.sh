@@ -111,7 +111,7 @@ _selfupdate_swap() {
     chmod +x "${stage}/bin/sentinel-ops" 2>/dev/null || true
 
     # The copy being replaced is kept until the next self-update, so a bad
-    # release can be put back by hand (see docs/OPERATIONS.md).
+    # release can be put back by hand (see the wiki page Update-the-Installer).
     rm -rf "$prev"
     mkdir -p "$prev" || return 1
     for sub in "${SO_INSTALLER_TREES[@]}"; do

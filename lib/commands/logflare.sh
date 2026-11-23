@@ -4,7 +4,7 @@
 #
 # Disabling keeps the logs already collected (the _analytics schema of the
 # _supabase database) and the LOGFLARE_* secrets in supabase/.env, so enabling
-# again picks up where it left off. See docs/LOGFLARE.md.
+# again picks up where it left off. See the wiki page Logflare-Analytics.
 # shellcheck shell=bash
 
 # Containers of the analytics/vector services that are still running. Compose

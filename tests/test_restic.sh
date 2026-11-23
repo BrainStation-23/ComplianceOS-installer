@@ -3,7 +3,7 @@
 # argument builder - in isolation from the restic binary or a real
 # repository. Everything that actually shells out to `restic` (_restic_run
 # and everything built on it) is a thin wrapper exercised manually, not here
-# - see docs/BACKUPS.md.
+# - see the wiki page Offsite-Backups.
 set -uo pipefail
 
 ROOT="${1:-$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"

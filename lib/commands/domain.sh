@@ -2,8 +2,8 @@
 # lib/commands/domain.sh - point the stack at a real domain, no reinstall.
 #
 # A domain implies a reverse proxy terminating TLS in front of both upstreams
-# (see docs/REVERSE-PROXY.md), so this also flips APP_BIND back to loopback -
-# per docs/DECISIONS.md #7 the installer never runs that proxy itself. Moving
+# (see the wiki page Go-Live-on-a-Domain), so this also flips APP_BIND back to loopback -
+# per Design-Decisions #7 the installer never runs that proxy itself. Moving
 # to a domain is therefore always a config change plus a restart: no rebuild,
 # no data loss, and it undoes exactly what `network enable` (or a fresh
 # install's LAN default) turned on.
@@ -34,7 +34,7 @@ _domain_normalize_host() {
 # Pure config transform: no Docker, no restart. Sets the three URLs to
 # https://<host>, flips APP_BIND back to loopback, and persists both to
 # installer.env and supabase/.env (the latter is what GoTrue and Kong
-# actually read - see docs/DECISIONS.md #7/#8).
+# actually read - see Design-Decisions #7/#8).
 _domain_apply_settings() {
     local host="$1"
     if [[ -z "$host" ]]; then
@@ -62,7 +62,7 @@ _domain_set() {
     [[ -n "$host" ]] || die "Not a usable hostname: ${raw}"
 
     log_info "Pointing Sentinel Ops at https://${host}"
-    log_warn "This installer does not run a reverse proxy for you - see docs/REVERSE-PROXY.md."
+    log_warn "This installer does not run a reverse proxy for you - see https://github.com/BrainStation-23/ComplianceOS-installer/wiki/Go-Live-on-a-Domain"
     log_warn "Make sure ${host} resolves here and something on this host terminates TLS on 443 first."
 
     if [[ "$SO_ASSUME_YES" != "true" ]]; then
@@ -97,7 +97,7 @@ _domain_set() {
     status_line "Supabase" "" "$SUPABASE_PUBLIC_URL"
     printf '\nPoint your reverse proxy at 127.0.0.1:%s (frontend) and 127.0.0.1:%s (Supabase API).\n' \
         "$APP_PORT" "$(supabase_kong_port 2>/dev/null || printf 8000)"
-    printf 'See docs/REVERSE-PROXY.md for worked Zoraxy/nginx/Caddy/Traefik configs.\n'
+    printf 'Worked Zoraxy/nginx/Caddy/Traefik configs: https://github.com/BrainStation-23/ComplianceOS-installer/wiki/Reverse-Proxy\n'
     printf 'Once the proxy is up, check that uploads get through it with:\n'
     printf '  sentinel-ops domain status\n\n'
     return 0

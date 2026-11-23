@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # lib/commands/backup.sh - create, list, verify and restore full-stack
-# backups. See lib/backup.sh for the underlying logic and docs/BACKUPS.md for
+# backups. See lib/backup.sh for the underlying logic and the wiki page Backup-and-Restore for
 # the full layout and 3-2-1 setup.
 # shellcheck shell=bash
 
