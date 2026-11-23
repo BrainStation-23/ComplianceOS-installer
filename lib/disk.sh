@@ -5,7 +5,7 @@
 # lib/images.sh, backups by retention in lib/backup.sh, container logs by
 # lib/container_logs.sh, and the installer's own run logs here. This file
 # also holds the free-space checks that stop a backup or an unattended update
-# from being the thing that fills the disk. See docs/DECISIONS.md #34.
+# from being the thing that fills the disk. See Design-Decisions #34.
 # shellcheck shell=bash
 
 # Non-secret config, persisted in installer.env.

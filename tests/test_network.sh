@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Exercise the LAN-IP detection a default install relies on: a browser on
 # another machine needs this host's real address, not "localhost" (which
-# resolves to itself, not the server) - see docs/DECISIONS.md #22.
+# resolves to itself, not the server) - see Design-Decisions #22.
 #
 # `ip` and `hostname` are stubbed as shell functions, which bash resolves
 # before anything on PATH, so no real networking is touched.

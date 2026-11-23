@@ -14,7 +14,7 @@
 # application, and rolling our own compose stack alongside Supabase's would
 # only create something else to keep in sync.
 #
-# The Supabase-side variables this phase owns are documented in docs/LOGFLARE.md.
+# The Supabase-side variables this phase owns are documented in the wiki page Logflare-Analytics.
 # shellcheck shell=bash
 
 # Logflare's HTTP port inside the container. Upstream deliberately does not
@@ -164,7 +164,7 @@ logflare_prompt_backend() {
             ;;
         bigquery)
             printf '\nNeeds a Google Cloud project with billing enabled and a service-account\n'
-            printf 'JSON key. See docs/LOGFLARE.md.\n'
+            printf 'JSON key. See https://github.com/BrainStation-23/ComplianceOS-installer/wiki/Logflare-Analytics\n'
             prompt_default GOOGLE_PROJECT_ID "Google Cloud project ID" \
                 "$(env_get "$env_file" GOOGLE_PROJECT_ID 2>/dev/null || true)"
             prompt_default GOOGLE_PROJECT_NUMBER "Google Cloud project number" \

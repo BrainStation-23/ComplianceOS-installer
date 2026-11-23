@@ -3,7 +3,7 @@
 # Docker. `_domain_apply_settings` is deliberately pure (no container restart,
 # same split as `_nuke_filesystem`/`cmd_nuke`), so it is tested directly
 # against the files it writes - which is exactly what the LAN/localhost bug
-# report (docs/DECISIONS.md #22) showed missing: URLs updated in memory but
+# report (Design-Decisions #22) showed missing: URLs updated in memory but
 # never persisted to supabase/.env, where Kong and GoTrue actually read them.
 set -uo pipefail
 

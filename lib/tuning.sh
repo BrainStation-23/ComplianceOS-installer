@@ -6,8 +6,8 @@
 # /dev/shm) and PostgREST with its default pool, whatever the host has. The
 # sizes here are computed from the host's RAM and cores and written to a
 # generated Compose overlay registered in COMPOSE_FILE - the same mechanism as
-# the storage, auth and logging overlays (docs/DECISIONS.md #28, #32, #34) - so
-# `update supabase` never reverts them. See docs/DECISIONS.md #38.
+# the storage, auth and logging overlays (Design-Decisions #28, #32, #34) - so
+# `update supabase` never reverts them. See Design-Decisions #38.
 #
 # Postgres gets its settings as `-c` arguments appended to upstream's own
 # command, read from Compose, so upstream's arguments (its config_file, its

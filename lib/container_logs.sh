@@ -7,9 +7,9 @@
 # containers (frontend, MDM proxy) as `docker run --log-opt` arguments, and on
 # the Supabase stack through a generated Compose overlay registered in
 # COMPOSE_FILE - the same mechanism as the storage and auth overlays
-# (docs/DECISIONS.md #28, #32). /etc/docker/daemon.json is left alone: it would
+# (Design-Decisions #28, #32). /etc/docker/daemon.json is left alone: it would
 # change every container on the host (a Zoraxy container, say) and needs a
-# Docker restart. See docs/DECISIONS.md #34.
+# Docker restart. See Design-Decisions #34.
 #
 # The overlay names every service the stack has, read from Compose itself, so
 # it is regenerated whenever that can change: install (before and after the

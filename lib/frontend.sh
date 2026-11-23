@@ -219,7 +219,7 @@ frontend_bind_address() {
 # when the secret comes with it, and answers 503 on /ManagementServer/MDM.svc
 # without one. Generated once, at least 24 characters, and kept with the other
 # secrets in supabase/.env; `sentinel-ops credentials --show` prints it for
-# the proxy's configuration (docs/REVERSE-PROXY.md).
+# the proxy's configuration (wiki: Reverse-Proxy).
 frontend_mdm_proxy_secret() {
     local env_file="${SUPABASE_DIR}/.env" secret
     secret="$(env_get "$env_file" MDM_PROXY_SECRET 2>/dev/null || true)"

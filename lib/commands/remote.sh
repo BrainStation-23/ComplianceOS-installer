@@ -2,7 +2,7 @@
 # lib/commands/remote.sh - configure the two 3-2-1 replication targets
 # (secondary = a different local/attached medium, offsite = remote/cloud),
 # both driven by restic (lib/restic.sh). Both are optional and off by
-# default. See docs/BACKUPS.md.
+# default. See the wiki page Offsite-Backups.
 # shellcheck shell=bash
 
 _remote_role_label() {
